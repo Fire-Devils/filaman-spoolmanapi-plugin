@@ -65,6 +65,7 @@ coverage/
 spec
 bump-version.sh
 _*
+!__init__.py
 local_cache
 .sisyphus/
 .opencode
