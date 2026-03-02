@@ -326,6 +326,41 @@
       margin-top: 8px;
     }
 
+    .api-url-row {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      margin-top: 8px;
+    }
+    .api-url-row .api-url {
+      flex: 1;
+      margin-top: 0;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: none;
+    }
+    .fm-btn-copy {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-top-right-radius: var(--radius-sm);
+      border-bottom-right-radius: var(--radius-sm);
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0 14px;
+      font-size: 0.85rem;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      transition: background var(--transition), color var(--transition);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+    .fm-btn-copy:hover {
+      background: var(--accent);
+      color: var(--btn-primary-text);
+    }
+
     /* Info text */
     .info-text {
       font-size: 0.85rem;
@@ -403,7 +438,10 @@
         </span>
       </div>
       <p class="info-text">Externe Clients können folgende Basis-URL verwenden:</p>
-      <div id="api-url" class="api-url"></div>
+      <div class="api-url-row">
+        <div id="api-url" class="api-url"></div>
+        <button type="button" id="btn-copy-url" class="fm-btn-copy" title="URL kopieren">⧉ Kopieren</button>
+      </div>
       <p class="info-text" style="margin-top: 8px;">
         Endpunkte: <code>/api/v1/vendor</code>, <code>/api/v1/filament</code>, <code>/api/v1/spool</code>, <code>/api/v1/info</code>, <code>/api/v1/health</code>
       </p>
@@ -518,6 +556,16 @@
 
     // ── Set API URL ─────────────────────────────────────────
     apiUrlEl.textContent = window.location.origin + '/spoolman'
+
+    // ── Copy URL ──────────────────────────────────────────
+    document.getElementById('btn-copy-url').addEventListener('click', function() {
+      var url = apiUrlEl.textContent
+      navigator.clipboard.writeText(url).then(function() {
+        showToast('URL kopiert', 'success')
+      }).catch(function() {
+        showToast('Kopieren fehlgeschlagen', 'error')
+      })
+    })
 
     // ── Toggle handler ──────────────────────────────────────
     toggleIpFilter.addEventListener('change', function() {
