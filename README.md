@@ -1,6 +1,6 @@
 # Spoolman API Plugin for FilaMan
 
-A FilaMan plugin that exposes a fully Spoolman-compatible REST API, allowing external tools like **Moonraker**, **OctoPrint** and others to use FilaMan as a drop-in replacement for Spoolman.
+A FilaMan plugin that exposes a fully Spoolman-compatible REST API, allowing external tools like **Moonraker**, **OctoPrint** and others to use FilaMan as a drop-in replacement for Spoolman. Unlike Spoolman itself, this plugin includes IP-based access control — letting you restrict which devices are allowed to reach the API.
 
 ## Features
 
@@ -8,8 +8,8 @@ A FilaMan plugin that exposes a fully Spoolman-compatible REST API, allowing ext
 - Vendor, Filament and Spool CRUD operations
 - Query filtering, sorting and pagination
 - CSV and JSON export
-- Configurable IP-based access control
-- Admin UI for managing allowed IPs
+- IP-based access control (a security layer missing in Spoolman)
+- Admin UI for managing the IP allowlist
 
 ## Installation
 
