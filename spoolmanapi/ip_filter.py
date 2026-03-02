@@ -58,7 +58,7 @@ async def require_ip_access(request: Request) -> None:
 
     Raises 403 when the client IP is not permitted.
     """
-    settings = load_settings()
+    settings = await load_settings()
 
     if not settings.ip_filter_enabled:
         return  # IP check disabled – allow all

@@ -493,7 +493,7 @@ async def get_settings(
     db: DBSession,
     principal=RequirePermission("admin:plugins_manage"),
 ):
-    return load_settings()
+    return await load_settings()
 
 
 @admin_router.put("/settings", response_model=schemas.SpoolmanAPISettings)
@@ -502,5 +502,5 @@ async def update_settings(
     db: DBSession,
     principal=RequirePermission("admin:plugins_manage"),
 ):
-    save_settings(data)
+    await save_settings(data)
     return data
