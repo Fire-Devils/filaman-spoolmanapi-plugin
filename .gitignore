@@ -70,6 +70,7 @@ local_cache
 .opencode
 Agents.md
 releases
+bump.sh
 
 # Installed plugins (only spoolman_import ships as default)
 backend/app/plugins/*/
