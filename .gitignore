@@ -69,6 +69,7 @@ local_cache
 .sisyphus/
 .opencode
 Agents.md
+releases
 
 # Installed plugins (only spoolman_import ships as default)
 backend/app/plugins/*/

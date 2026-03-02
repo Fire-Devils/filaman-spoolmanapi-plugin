@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="brand">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FilaMan - Spoolman API</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Fraunces:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'brand';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <style>
+    :root {
+      --font-sans: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+      --font-serif: "Fraunces", "Georgia", serif;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 12px;
+      --shadow-sm: 0 6px 18px rgba(0,0,0,0.08);
+      --shadow-md: 0 12px 30px rgba(0,0,0,0.12);
+      --transition: 220ms ease;
+    }
+
+    html[data-theme="brand"] {
+      --bg: #0c1612; --bg-elevated: #13261d; --bg-soft: #183225;
+      --text: #e9f3ec; --text-muted: #b5c7bd;
+      --accent: #4ee3a2; --accent-2: #6cc6ff; --accent-3: #f7c86a;
+      --border: rgba(255,255,255,0.08);
+      --glow: 0 0 45px rgba(78,227,162,0.35);
+      --btn-primary-text: #0b120e;
+      --input-bg: #183225;
+      --focus-ring: rgba(78,227,162,0.18);
+      --error-text: #fca5a5; --success-text: #86efac;
+      --gradient-hero: radial-gradient(circle at 20% 20%, rgba(78,227,162,0.25), transparent 60%),
+        radial-gradient(circle at 80% 0%, rgba(108,198,255,0.18), transparent 55%),
+        linear-gradient(140deg, #0c1612 0%, #12251b 45%, #0b1410 100%);
+    }
+    html[data-theme="light"] {
+      --bg: #f8f6f1; --bg-elevated: #ffffff; --bg-soft: #f1ece3;
+      --text: #1a231e; --text-muted: #53645a;
+      --accent: #1c9b6b; --accent-2: #2b7bc7; --accent-3: #d38e2c;
+      --border: rgba(26,35,30,0.12);
+      --glow: 0 0 45px rgba(28,155,107,0.18);
+      --btn-primary-text: #ffffff;
+      --input-bg: #f1ece3;
+      --focus-ring: rgba(28,155,107,0.18);
+      --error-text: #b91c1c; --success-text: #15803d;
+      --gradient-hero: radial-gradient(circle at 20% 20%, rgba(28,155,107,0.16), transparent 60%),
+        radial-gradient(circle at 80% 0%, rgba(43,123,199,0.14), transparent 55%),
+        linear-gradient(140deg, #f8f6f1 0%, #f1ece3 50%, #ffffff 100%);
+    }
+    html[data-theme="dark"] {
+      --bg: #0b0d12; --bg-elevated: #141825; --bg-soft: #1a2032;
+      --text: #eef1f7; --text-muted: #9aa4b7;
+      --accent: #73d1ff; --accent-2: #8cf3b2; --accent-3: #f3a05f;
+      --border: rgba(255,255,255,0.08);
+      --glow: 0 0 45px rgba(115,209,255,0.35);
+      --btn-primary-text: #0b120e;
+      --input-bg: #1a2032;
+      --focus-ring: rgba(115,209,255,0.18);
+      --error-text: #fca5a5; --success-text: #86efac;
+      --gradient-hero: radial-gradient(circle at 20% 20%, rgba(115,209,255,0.25), transparent 60%),
+        radial-gradient(circle at 80% 0%, rgba(140,243,178,0.18), transparent 55%),
+        linear-gradient(145deg, #0b0d12 0%, #0f1421 55%, #0b0d12 100%);
+    }
+
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--gradient-hero);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .page-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Cards */
+    .fm-card {
+      background: var(--bg-elevated);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 24px;
+    }
+
+    .fm-card-header {
+      font-family: var(--font-serif);
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin: 0 0 16px;
+    }
+
+    /* Buttons */
+    .fm-btn {
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-weight: 600;
+      font-size: 0.875rem;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition);
+      font-family: var(--font-sans);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .fm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .fm-btn-primary {
+      background: var(--accent);
+      color: var(--btn-primary-text);
+      box-shadow: var(--glow);
+    }
+    .fm-btn-primary:hover:not(:disabled) { transform: translateY(-2px); }
+    .fm-btn-outline {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--text);
+    }
+    .fm-btn-outline:hover:not(:disabled) { background: var(--bg-soft); }
+    .fm-btn-sm {
+      padding: 6px 12px;
+      font-size: 0.8rem;
+    }
+    .fm-btn-danger {
+      background: transparent;
+      border-color: var(--error-text);
+      color: var(--error-text);
+    }
+    .fm-btn-danger:hover:not(:disabled) { background: rgba(252,165,165,0.1); }
+
+    /* Form elements */
+    .fm-label {
+      display: block;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+    .fm-input {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      width: 100%;
+      height: 42px;
+      box-sizing: border-box;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .fm-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .toggle-label {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .toggle-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      transition: background var(--transition), border-color var(--transition);
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      transition: transform var(--transition), background var(--transition);
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(22px);
+      background: var(--btn-primary-text);
+    }
+
+    /* IP Tags */
+    .ip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      min-height: 32px;
+    }
+    .ip-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 8px 5px 12px;
+      font-size: 0.85rem;
+      font-family: "SF Mono", "Fira Code", monospace;
+      color: var(--text);
+      transition: border-color var(--transition);
+    }
+    .ip-tag:hover {
+      border-color: var(--error-text);
+    }
+    .ip-tag-remove {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+      padding: 0;
+      line-height: 1;
+    }
+    .ip-tag-remove:hover {
+      background: var(--error-text);
+      color: var(--btn-primary-text);
+    }
+
+    /* Add IP row */
+    .add-ip-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .add-ip-row .fm-input {
+      flex: 1;
+    }
+
+    /* IP section */
+    .ip-section {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+    .ip-section.hidden { display: none; }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .status-badge-active {
+      background: rgba(78,227,162,0.15);
+      color: var(--success-text);
+    }
+    .status-badge-inactive {
+      background: var(--bg-soft);
+      color: var(--text-muted);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .status-badge-active .status-dot { background: var(--success-text); }
+    .status-badge-inactive .status-dot { background: var(--text-muted); }
+
+    /* API URL display */
+    .api-url {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.9rem;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      color: var(--accent);
+      word-break: break-all;
+      margin-top: 8px;
+    }
+
+    /* Info text */
+    .info-text {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 16px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      padding: 12px 20px;
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+      font-weight: 500;
+      box-shadow: var(--shadow-md);
+      animation: toast-in 220ms ease;
+      max-width: 380px;
+    }
+    .toast-success {
+      background: var(--bg-elevated);
+      border: 1px solid var(--accent);
+      color: var(--success-text);
+    }
+    .toast-error {
+      background: var(--bg-elevated);
+      border: 1px solid var(--error-text);
+      color: var(--error-text);
+    }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="page-content">
+
+    <div style="margin-bottom: 24px;">
+      <a href="/admin/system">&larr; Zurück zu System</a>
+    </div>
+
+    <h1 style="font-size: 1.8rem; font-weight: 700; margin: 0 0 8px; font-family: var(--font-serif);">Spoolman API</h1>
+    <p style="color: var(--text-muted); margin-bottom: 24px;">Stellt eine Spoolman-kompatible REST-API bereit, damit externe Tools (Moonraker, OctoPrint etc.) auf FilaMan zugreifen können.</p>
+
+    <!-- Status Card -->
+    <div class="fm-card">
+      <h2 class="fm-card-header">API-Status</h2>
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+        <span id="status-badge" class="status-badge status-badge-active">
+          <span class="status-dot"></span>
+          Aktiv
+        </span>
+      </div>
+      <p class="info-text">Externe Clients können folgende Basis-URL verwenden:</p>
+      <div id="api-url" class="api-url"></div>
+      <p class="info-text" style="margin-top: 8px;">
+        Endpunkte: <code>/api/v1/vendor</code>, <code>/api/v1/filament</code>, <code>/api/v1/spool</code>, <code>/api/v1/info</code>, <code>/api/v1/health</code>
+      </p>
+    </div>
+
+    <!-- IP Filter Settings Card -->
+    <div class="fm-card">
+      <h2 class="fm-card-header">IP-Zugriffskontrolle</h2>
+      <p class="info-text" style="margin-bottom: 16px;">Beschränke den Zugriff auf die Spoolman API auf bestimmte IP-Adressen. Wenn deaktiviert, kann jede IP-Adresse zugreifen.</p>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">IP-Filter aktivieren</div>
+          <div class="toggle-desc">Nur Anfragen von erlaubten IP-Adressen zulassen</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-ip-filter" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div id="ip-section" class="ip-section hidden">
+        <label class="fm-label">Erlaubte IP-Adressen / Bereiche</label>
+        <p class="info-text" style="margin-bottom: 8px;">Einzelne IPs, CIDR-Bereiche (z.B. <code>192.168.1.0/24</code>) oder <code>*</code> für alle.</p>
+
+        <div id="ip-list" class="ip-list">
+          <div class="empty-state" id="ip-empty">Keine IP-Adressen konfiguriert</div>
+        </div>
+
+        <div class="add-ip-row">
+          <input type="text" id="input-ip" class="fm-input" placeholder="z.B. 192.168.1.0/24 oder 10.0.0.5" />
+          <button type="button" id="btn-add-ip" class="fm-btn fm-btn-outline fm-btn-sm">Hinzufügen</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+        <button type="button" id="btn-save" class="fm-btn fm-btn-primary">Einstellungen speichern</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <script>
+    // ── Helpers ──────────────────────────────────────────────
+    function getCsrfToken() {
+      var match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]*)/)
+      return match ? decodeURIComponent(match[1]) : ''
+    }
+
+    function escapeHtml(str) {
+      var div = document.createElement('div')
+      div.textContent = str
+      return div.innerHTML
+    }
+
+    function showToast(message, type) {
+      var container = document.getElementById('toast-container')
+      var toast = document.createElement('div')
+      toast.className = 'toast toast-' + (type || 'success')
+      toast.textContent = message
+      container.appendChild(toast)
+      setTimeout(function() {
+        toast.style.opacity = '0'
+        toast.style.transform = 'translateY(12px)'
+        toast.style.transition = 'opacity 220ms, transform 220ms'
+        setTimeout(function() { toast.remove() }, 220)
+      }, 3000)
+    }
+
+    // ── State ───────────────────────────────────────────────
+    var allowedIps = []
+
+    // ── API helpers ─────────────────────────────────────────
+    async function apiFetch(url, options) {
+      options = options || {}
+      var resp = await fetch(url, {
+        credentials: 'include',
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+        },
+      })
+      if (!resp.ok) {
+        var data = await resp.json().catch(function() { return {} })
+        throw new Error(data.detail?.message || data.detail || 'HTTP ' + resp.status)
+      }
+      return resp.json()
+    }
+
+    async function apiPut(url, body) {
+      return apiFetch(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': getCsrfToken(),
+        },
+        body: JSON.stringify(body),
+      })
+    }
+
+    // ── DOM refs ────────────────────────────────────────────
+    var toggleIpFilter = document.getElementById('toggle-ip-filter')
+    var ipSection = document.getElementById('ip-section')
+    var ipList = document.getElementById('ip-list')
+    var ipEmpty = document.getElementById('ip-empty')
+    var inputIp = document.getElementById('input-ip')
+    var btnAddIp = document.getElementById('btn-add-ip')
+    var btnSave = document.getElementById('btn-save')
+    var apiUrlEl = document.getElementById('api-url')
+
+    // ── Set API URL ─────────────────────────────────────────
+    apiUrlEl.textContent = window.location.origin + '/spoolman'
+
+    // ── Toggle handler ──────────────────────────────────────
+    toggleIpFilter.addEventListener('change', function() {
+      if (toggleIpFilter.checked) {
+        ipSection.classList.remove('hidden')
+      } else {
+        ipSection.classList.add('hidden')
+      }
+    })
+
+    // ── IP list rendering ───────────────────────────────────
+    function renderIpList() {
+      // Remove all tags but keep empty state
+      var tags = ipList.querySelectorAll('.ip-tag')
+      tags.forEach(function(tag) { tag.remove() })
+
+      if (allowedIps.length === 0) {
+        ipEmpty.style.display = 'block'
+        return
+      }
+
+      ipEmpty.style.display = 'none'
+      allowedIps.forEach(function(ip, index) {
+        var tag = document.createElement('span')
+        tag.className = 'ip-tag'
+        tag.innerHTML = escapeHtml(ip) +
+          '<button type="button" class="ip-tag-remove" data-index="' + index + '" title="Entfernen">&times;</button>'
+        ipList.appendChild(tag)
+      })
+    }
+
+    // ── Add IP ──────────────────────────────────────────────
+    function addIp() {
+      var value = inputIp.value.trim()
+      if (!value) return
+
+      if (allowedIps.indexOf(value) !== -1) {
+        showToast('IP-Adresse bereits vorhanden', 'error')
+        return
+      }
+
+      allowedIps.push(value)
+      inputIp.value = ''
+      renderIpList()
+    }
+
+    btnAddIp.addEventListener('click', addIp)
+    inputIp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        addIp()
+      }
+    })
+
+    // ── Remove IP (event delegation) ────────────────────────
+    ipList.addEventListener('click', function(e) {
+      var btn = e.target.closest('.ip-tag-remove')
+      if (!btn) return
+      var index = parseInt(btn.dataset.index, 10)
+      allowedIps.splice(index, 1)
+      renderIpList()
+    })
+
+    // ── Save settings ───────────────────────────────────────
+    btnSave.addEventListener('click', async function() {
+      btnSave.disabled = true
+      btnSave.textContent = 'Speichern...'
+
+      try {
+        var payload = {
+          ip_filter_enabled: toggleIpFilter.checked,
+          allowed_ips: allowedIps,
+        }
+        await apiPut('/api/v1/admin/system/spoolman-api/settings', payload)
+        showToast('Einstellungen gespeichert', 'success')
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error')
+      } finally {
+        btnSave.disabled = false
+        btnSave.textContent = 'Einstellungen speichern'
+      }
+    })
+
+    // ── Load settings on page load ──────────────────────────
+    async function loadSettings() {
+      try {
+        var settings = await apiFetch('/api/v1/admin/system/spoolman-api/settings')
+        toggleIpFilter.checked = !!settings.ip_filter_enabled
+        allowedIps = Array.isArray(settings.allowed_ips) ? settings.allowed_ips : []
+
+        if (toggleIpFilter.checked) {
+          ipSection.classList.remove('hidden')
+        } else {
+          ipSection.classList.add('hidden')
+        }
+
+        renderIpList()
+      } catch (err) {
+        showToast('Einstellungen konnten nicht geladen werden: ' + err.message, 'error')
+      }
+    }
+
+    loadSettings()
+  </script>
+</body>
+</html>
