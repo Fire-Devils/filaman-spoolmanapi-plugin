@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import math
 from datetime import datetime, timezone
 from typing import Any
@@ -85,7 +86,7 @@ class SpoolmanService:
     async def create_vendor(self, data: schemas.VendorParameters) -> schemas.Vendor:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update(data.extra)
+            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
         if data.comment is not None:
             custom_fields["comment"] = data.comment
         if data.external_id is not None:
@@ -125,7 +126,7 @@ class SpoolmanService:
             else:
                 custom_fields["external_id"] = payload["external_id"]
         if "extra" in payload and payload["extra"]:
-            custom_fields.update(payload["extra"])
+            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
 
         vendor.custom_fields = custom_fields or None
         await self.db.commit()
@@ -225,7 +226,7 @@ class SpoolmanService:
     async def create_filament(self, data: schemas.FilamentParameters) -> schemas.Filament:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update(data.extra)
+            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
         if data.article_number is not None:
             custom_fields["article_number"] = data.article_number
         if data.comment is not None:
@@ -310,7 +311,7 @@ class SpoolmanService:
             else:
                 custom_fields["external_id"] = payload["external_id"]
         if "extra" in payload and payload["extra"]:
-            custom_fields.update(payload["extra"])
+            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
 
         filament.custom_fields = custom_fields or None
 
@@ -425,7 +426,7 @@ class SpoolmanService:
     async def create_spool(self, data: schemas.SpoolParameters) -> schemas.Spool:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update(data.extra)
+            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
         if data.comment is not None:
             custom_fields["comment"] = data.comment
 
@@ -480,7 +481,7 @@ class SpoolmanService:
             else:
                 custom_fields["comment"] = payload["comment"]
         if "extra" in payload and payload["extra"]:
-            custom_fields.update(payload["extra"])
+            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
         spool.custom_fields = custom_fields or None
 
         if any(key in payload for key in ("initial_weight", "spool_weight", "remaining_weight", "used_weight")):
@@ -706,7 +707,7 @@ class SpoolmanService:
             comment=comment,
             empty_spool_weight=manufacturer.empty_spool_weight_g,
             external_id=external_id,
-            extra={k: str(v) for k, v in extra.items()},
+            extra={k: json.dumps(v) for k, v in extra.items()},
         )
 
     def _filament_to_schema(self, filament: Filament) -> schemas.Filament:
@@ -726,7 +727,7 @@ class SpoolmanService:
                 for item in colors
                 if item.position > 1 and item.color and item.color.hex_code
             ]
-        multi_color_hexes = ",".join(multi_colors) if multi_colors else None
+        multi_color_hexes = ",".join(multi_colors) if multi_colors else ""
 
         custom_fields = dict(filament.custom_fields or {})
         article_number = custom_fields.pop("article_number", None)
@@ -754,7 +755,7 @@ class SpoolmanService:
             multi_color_hexes=multi_color_hexes,
             multi_color_direction=filament.multi_color_style,
             external_id=external_id,
-            extra={k: str(v) for k, v in custom_fields.items()},
+            extra={k: json.dumps(v) for k, v in custom_fields.items()},
         )
 
     async def _find_or_create_color(self, hex_code: str) -> Color:
@@ -861,7 +862,7 @@ class SpoolmanService:
             lot_nr=spool.lot_number,
             comment=comment,
             archived=spool.status.key == "archived" if spool.status else False,
-            extra={k: str(v) for k, v in custom_fields.items()},
+            extra={k: json.dumps(v) for k, v in custom_fields.items()},
         )
 
     async def _resolve_location(self, name: str | None) -> int | None:
