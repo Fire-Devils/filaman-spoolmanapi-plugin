@@ -5,7 +5,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,10 +41,39 @@ class SpoolmanService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def list_vendors(self) -> list[schemas.Vendor]:
-        result = await self.db.execute(select(Manufacturer).order_by(Manufacturer.id))
+    async def list_vendors(
+        self,
+        name: str | None = None,
+        external_id: str | None = None,
+        sort: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[schemas.Vendor], int]:
+        query = select(Manufacturer)
+
+        if name:
+            query = self._apply_text_filter(query, Manufacturer.name, name)
+        if external_id is not None:
+            external_field = Manufacturer.custom_fields["external_id"].as_string()
+            query = self._apply_text_filter(query, external_field, external_id)
+
+        query = self._apply_sort(
+            query,
+            sort,
+            {
+                "name": Manufacturer.name,
+                "id": Manufacturer.id,
+                "registered": Manufacturer.created_at,
+            },
+            default_column=Manufacturer.id,
+        )
+
+        total_count = await self._count_query(query, Manufacturer.id)
+        query = self._apply_pagination(query, limit, offset)
+
+        result = await self.db.execute(query)
         vendors = result.scalars().all()
-        return [self._manufacturer_to_vendor(vendor) for vendor in vendors]
+        return [self._manufacturer_to_vendor(vendor) for vendor in vendors], total_count
 
     async def get_vendor(self, vendor_id: int) -> schemas.Vendor | None:
         result = await self.db.execute(select(Manufacturer).where(Manufacturer.id == vendor_id))
@@ -112,17 +141,80 @@ class SpoolmanService:
         await self.db.commit()
         return True
 
-    async def list_filaments(self) -> list[schemas.Filament]:
-        result = await self.db.execute(
+    async def list_filaments(
+        self,
+        vendor_name: str | None = None,
+        vendor_id: str | None = None,
+        name: str | None = None,
+        material: str | None = None,
+        article_number: str | None = None,
+        color_hex: str | None = None,
+        external_id: str | None = None,
+        sort: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[schemas.Filament], int]:
+        query = (
             select(Filament)
             .options(
                 selectinload(Filament.manufacturer),
                 selectinload(Filament.filament_colors).selectinload(FilamentColor.color),
             )
-            .order_by(Filament.id)
+            .outerjoin(Manufacturer, Filament.manufacturer_id == Manufacturer.id)
         )
+
+        if vendor_name:
+            query = self._apply_text_filter(query, Manufacturer.name, vendor_name)
+        if vendor_id:
+            vendor_ids, include_null = self._parse_id_list(vendor_id)
+            conditions: list[Any] = []
+            if vendor_ids:
+                conditions.append(Filament.manufacturer_id.in_(vendor_ids))
+            if include_null:
+                conditions.append(Filament.manufacturer_id.is_(None))
+            if conditions:
+                query = query.where(or_(*conditions))
+        if name:
+            query = self._apply_text_filter(query, Filament.designation, name)
+        if material:
+            query = self._apply_text_filter(query, Filament.material_type, material)
+        if article_number is not None:
+            article_field = Filament.custom_fields["article_number"].as_string()
+            query = self._apply_text_filter(query, article_field, article_number)
+        if external_id is not None:
+            external_field = Filament.custom_fields["external_id"].as_string()
+            query = self._apply_text_filter(query, external_field, external_id)
+        if color_hex:
+            normalized = color_hex.strip().lstrip("#").upper()
+            query = query.outerjoin(FilamentColor, FilamentColor.filament_id == Filament.id).outerjoin(
+                Color, FilamentColor.color_id == Color.id
+            )
+            query = query.where(func.upper(func.replace(Color.hex_code, "#", "")) == normalized)
+
+        query = self._apply_sort(
+            query,
+            sort,
+            {
+                "name": Filament.designation,
+                "vendor.name": Manufacturer.name,
+                "material": Filament.material_type,
+                "id": Filament.id,
+                "registered": Filament.created_at,
+                "density": Filament.density_g_cm3,
+                "diameter": Filament.diameter_mm,
+                "weight": Filament.raw_material_weight_g,
+                "spool_weight": Filament.default_spool_weight_g,
+                "price": Filament.price,
+            },
+            default_column=Filament.id,
+        )
+
+        total_count = await self._count_query(query, Filament.id)
+        query = self._apply_pagination(query, limit, offset)
+
+        result = await self.db.execute(query)
         filaments = result.scalars().unique().all()
-        return [self._filament_to_schema(filament) for filament in filaments]
+        return [self._filament_to_schema(filament) for filament in filaments], total_count
 
     async def get_filament(self, filament_id: int) -> schemas.Filament | None:
         filament = await self._get_filament(filament_id)
@@ -245,8 +337,21 @@ class SpoolmanService:
         await self.db.commit()
         return True
 
-    async def list_spools(self) -> list[schemas.Spool]:
-        result = await self.db.execute(
+    async def list_spools(
+        self,
+        filament_name: str | None = None,
+        filament_id: str | None = None,
+        filament_material: str | None = None,
+        vendor_name: str | None = None,
+        vendor_id: str | None = None,
+        location: str | None = None,
+        lot_nr: str | None = None,
+        allow_archived: bool = False,
+        sort: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[schemas.Spool], int]:
+        query = (
             select(Spool)
             .options(
                 selectinload(Spool.filament).selectinload(Filament.manufacturer),
@@ -254,10 +359,62 @@ class SpoolmanService:
                 selectinload(Spool.status),
                 selectinload(Spool.location),
             )
-            .order_by(Spool.id)
+            .join(Filament, Spool.filament_id == Filament.id)
+            .outerjoin(Manufacturer, Filament.manufacturer_id == Manufacturer.id)
+            .outerjoin(Location, Spool.location_id == Location.id)
+            .join(SpoolStatus, Spool.status_id == SpoolStatus.id)
         )
+
+        if not allow_archived:
+            query = query.where(SpoolStatus.key != "archived")
+        if filament_name:
+            query = self._apply_text_filter(query, Filament.designation, filament_name)
+        if filament_id:
+            filament_ids, _ = self._parse_id_list(filament_id)
+            if filament_ids:
+                query = query.where(Spool.filament_id.in_(filament_ids))
+        if filament_material:
+            query = self._apply_text_filter(query, Filament.material_type, filament_material)
+        if vendor_name:
+            query = self._apply_text_filter(query, Manufacturer.name, vendor_name)
+        if vendor_id:
+            vendor_ids, include_null = self._parse_id_list(vendor_id)
+            conditions: list[Any] = []
+            if vendor_ids:
+                conditions.append(Filament.manufacturer_id.in_(vendor_ids))
+            if include_null:
+                conditions.append(Filament.manufacturer_id.is_(None))
+            if conditions:
+                query = query.where(or_(*conditions))
+        if location:
+            query = self._apply_text_filter(query, Location.name, location)
+        if lot_nr:
+            query = self._apply_text_filter(query, Spool.lot_number, lot_nr)
+
+        query = self._apply_sort(
+            query,
+            sort,
+            {
+                "id": Spool.id,
+                "registered": Spool.created_at,
+                "first_used": Spool.stocked_in_at,
+                "last_used": Spool.last_used_at,
+                "filament.name": Filament.designation,
+                "filament.material": Filament.material_type,
+                "filament.vendor.name": Manufacturer.name,
+                "location": Location.name,
+                "lot_nr": Spool.lot_number,
+                "remaining_weight": Spool.remaining_weight_g,
+            },
+            default_column=Spool.id,
+        )
+
+        total_count = await self._count_query(query, Spool.id)
+        query = self._apply_pagination(query, limit, offset)
+
+        result = await self.db.execute(query)
         spools = result.scalars().unique().all()
-        return [self._spool_to_schema(spool) for spool in spools]
+        return [self._spool_to_schema(spool) for spool in spools], total_count
 
     async def get_spool(self, spool_id: int) -> schemas.Spool | None:
         spool = await self._get_spool(spool_id)
@@ -390,6 +547,153 @@ class SpoolmanService:
         )
         spool = await self._get_spool(spool.id)
         return self._spool_to_schema(spool)
+
+    async def list_materials(self) -> list[str]:
+        result = await self.db.execute(select(Filament.material_type).distinct().order_by(Filament.material_type))
+        return [item for item in result.scalars().all() if item]
+
+    async def list_article_numbers(self) -> list[str]:
+        result = await self.db.execute(select(Filament.custom_fields))
+        article_numbers: set[str] = set()
+        for fields in result.scalars().all():
+            if not fields:
+                continue
+            value = fields.get("article_number")
+            if value:
+                article_numbers.add(value)
+        return sorted(article_numbers)
+
+    async def list_lot_numbers(self) -> list[str]:
+        result = await self.db.execute(select(Spool.lot_number).distinct().order_by(Spool.lot_number))
+        return [item for item in result.scalars().all() if item]
+
+    async def list_locations(self) -> list[str]:
+        result = await self.db.execute(select(Location.name).order_by(Location.name))
+        return [item for item in result.scalars().all() if item]
+
+    async def rename_location(self, old_name: str, new_name: str) -> str | None:
+        result = await self.db.execute(select(Location).where(func.lower(Location.name) == old_name.lower()))
+        location = result.scalar_one_or_none()
+        if not location:
+            return None
+        location.name = new_name
+        await self.db.commit()
+        return location.name
+
+    async def export_spools(self) -> list[dict]:
+        result = await self.db.execute(
+            select(Spool)
+            .options(
+                selectinload(Spool.filament).selectinload(Filament.manufacturer),
+                selectinload(Spool.status),
+                selectinload(Spool.location),
+            )
+            .order_by(Spool.id)
+        )
+        spools = result.scalars().unique().all()
+        payload: list[dict] = []
+        for spool in spools:
+            filament = spool.filament
+            vendor = filament.manufacturer if filament else None
+            payload.append(
+                {
+                    "id": spool.id,
+                    "registered": spool.created_at,
+                    "first_used": spool.stocked_in_at,
+                    "last_used": spool.last_used_at,
+                    "filament_id": spool.filament_id,
+                    "filament_name": filament.designation if filament else None,
+                    "filament_material": filament.material_type if filament else None,
+                    "vendor_id": vendor.id if vendor else None,
+                    "vendor_name": vendor.name if vendor else None,
+                    "price": spool.purchase_price,
+                    "initial_total_weight_g": spool.initial_total_weight_g,
+                    "empty_spool_weight_g": spool.empty_spool_weight_g,
+                    "remaining_weight_g": spool.remaining_weight_g,
+                    "location": spool.location.name if spool.location else None,
+                    "lot_number": spool.lot_number,
+                    "status": spool.status.key if spool.status else None,
+                    "custom_fields": spool.custom_fields,
+                }
+            )
+        return payload
+
+    async def export_filaments(self) -> list[dict]:
+        result = await self.db.execute(
+            select(Filament)
+            .options(
+                selectinload(Filament.manufacturer),
+                selectinload(Filament.filament_colors).selectinload(FilamentColor.color),
+            )
+            .order_by(Filament.id)
+        )
+        filaments = result.scalars().unique().all()
+        payload: list[dict] = []
+        for filament in filaments:
+            vendor = filament.manufacturer
+            payload.append(
+                {
+                    "id": filament.id,
+                    "registered": filament.created_at,
+                    "name": filament.designation,
+                    "vendor_id": vendor.id if vendor else None,
+                    "vendor_name": vendor.name if vendor else None,
+                    "material": filament.material_type,
+                    "price": filament.price,
+                    "density": filament.density_g_cm3,
+                    "diameter": filament.diameter_mm,
+                    "weight": filament.raw_material_weight_g,
+                    "spool_weight": filament.default_spool_weight_g,
+                    "color_mode": filament.color_mode,
+                    "multi_color_style": filament.multi_color_style,
+                    "custom_fields": filament.custom_fields,
+                }
+            )
+        return payload
+
+    async def export_vendors(self) -> list[dict]:
+        result = await self.db.execute(select(Manufacturer).order_by(Manufacturer.id))
+        vendors = result.scalars().all()
+        return [
+            {
+                "id": vendor.id,
+                "registered": vendor.created_at,
+                "name": vendor.name,
+                "empty_spool_weight_g": vendor.empty_spool_weight_g,
+                "custom_fields": vendor.custom_fields,
+            }
+            for vendor in vendors
+        ]
+
+    async def get_all_settings(self) -> dict[str, Any]:
+        return {
+            "currency": {"value": "EUR", "is_set": False, "type": "string"},
+        }
+
+    async def get_setting(self, key: str) -> dict | None:
+        settings = await self.get_all_settings()
+        return settings.get(key)
+
+    async def set_setting(self, key: str, value: Any) -> dict | None:
+        return {"value": value, "is_set": True, "type": "string"}
+
+    async def get_extra_fields(self, entity_type: str) -> list:
+        return []
+
+    async def add_extra_field(self, entity_type: str, key: str, data: dict) -> list:
+        return []
+
+    async def delete_extra_field(self, entity_type: str, key: str) -> list | None:
+        return []
+
+    async def get_external_filaments(self) -> list:
+        return []
+
+    async def get_external_materials(self) -> list:
+        return []
+
+    async def create_backup(self) -> str:
+        return "/data/backups/filaman_backup.db"
 
     def _manufacturer_to_vendor(self, manufacturer: Manufacturer) -> schemas.Vendor:
         extra = dict(manufacturer.custom_fields or {})
@@ -595,3 +899,98 @@ class SpoolmanService:
             spool.remaining_weight_g = initial_weight - used_weight
         elif initial_weight is not None and remaining_weight is None:
             spool.remaining_weight_g = initial_weight
+
+    def _apply_text_filter(self, query: Any, column: Any, search_term: str | None) -> Any:
+        if search_term is None:
+            return query
+
+        terms = self._split_search_terms(search_term)
+        if not terms:
+            return query
+
+        conditions: list[Any] = []
+        for term in terms:
+            if term == "":
+                conditions.append(or_(column.is_(None), column == ""))
+                continue
+            if term.startswith("\"") and term.endswith("\"") and len(term) >= 2:
+                raw = term[1:-1]
+                conditions.append(func.lower(column) == raw.lower())
+                continue
+            conditions.append(func.lower(column).like(f"%{term.lower()}%"))
+
+        if conditions:
+            query = query.where(or_(*conditions))
+        return query
+
+    def _split_search_terms(self, raw: str) -> list[str]:
+        terms: list[str] = []
+        current: list[str] = []
+        in_quotes = False
+        for char in raw:
+            if char == "\"":
+                in_quotes = not in_quotes
+                current.append(char)
+                continue
+            if char == "," and not in_quotes:
+                terms.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        terms.append("".join(current).strip())
+        return [term for term in terms if term is not None]
+
+    def _parse_id_list(self, raw: str) -> tuple[list[int], bool]:
+        include_null = False
+        ids: list[int] = []
+        for item in raw.split(","):
+            value = item.strip()
+            if not value:
+                continue
+            if value == "-1":
+                include_null = True
+                continue
+            try:
+                ids.append(int(value))
+            except ValueError:
+                continue
+        return ids, include_null
+
+    def _apply_sort(
+        self, query: Any, sort: str | None, mapping: dict[str, Any], default_column: Any
+    ) -> Any:
+        if not sort:
+            return query.order_by(default_column)
+
+        order_by: list[Any] = []
+        for part in sort.split(","):
+            segment = part.strip()
+            if not segment:
+                continue
+            if ":" in segment:
+                field, direction = segment.split(":", 1)
+            else:
+                field, direction = segment, "asc"
+            field = field.strip()
+            direction = direction.strip().lower()
+            column = mapping.get(field)
+            if not column:
+                continue
+            order_by.append(column.desc() if direction == "desc" else column.asc())
+
+        if not order_by:
+            return query.order_by(default_column)
+        return query.order_by(*order_by)
+
+    def _apply_pagination(self, query: Any, limit: int | None, offset: int) -> Any:
+        if offset:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query
+
+    async def _count_query(self, query: Any, id_column: Any) -> int:
+        base_query = query.order_by(None)
+        distinct_ids = base_query.with_only_columns(id_column, maintain_column_froms=True).distinct().subquery()
+        result = await self.db.execute(select(func.count()).select_from(distinct_ids))
+        return result.scalar_one()

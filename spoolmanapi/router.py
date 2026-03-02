@@ -5,7 +5,7 @@ plus admin endpoints for managing the plugin's IP-filter settings.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import DBSession, RequirePermission
 
@@ -35,9 +35,25 @@ async def health_check():
 
 
 @router.get("/vendor", response_model=list[schemas.Vendor])
-async def list_vendors(db: DBSession):
+async def list_vendors(
+    response: Response,
+    db: DBSession,
+    name: str | None = Query(None),
+    external_id: str | None = Query(None),
+    sort: str | None = Query(None),
+    limit: int | None = Query(None),
+    offset: int = Query(0),
+):
     svc = SpoolmanService(db)
-    return await svc.list_vendors()
+    vendors, total = await svc.list_vendors(
+        name=name,
+        external_id=external_id,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    response.headers["x-total-count"] = str(total)
+    return vendors
 
 
 @router.get("/vendor/{vendor_id}", response_model=schemas.Vendor)
@@ -86,9 +102,36 @@ async def delete_vendor(vendor_id: int, db: DBSession):
 
 
 @router.get("/filament", response_model=list[schemas.Filament])
-async def list_filaments(db: DBSession):
+async def list_filaments(
+    response: Response,
+    db: DBSession,
+    vendor_name: str | None = Query(None, alias="vendor.name"),
+    vendor_id: str | None = Query(None, alias="vendor.id"),
+    name: str | None = Query(None),
+    material: str | None = Query(None),
+    article_number: str | None = Query(None),
+    color_hex: str | None = Query(None),
+    color_similarity_threshold: float = Query(20),
+    external_id: str | None = Query(None),
+    sort: str | None = Query(None),
+    limit: int | None = Query(None),
+    offset: int = Query(0),
+):
     svc = SpoolmanService(db)
-    return await svc.list_filaments()
+    filaments, total = await svc.list_filaments(
+        vendor_name=vendor_name,
+        vendor_id=vendor_id,
+        name=name,
+        material=material,
+        article_number=article_number,
+        color_hex=color_hex,
+        external_id=external_id,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    response.headers["x-total-count"] = str(total)
+    return filaments
 
 
 @router.get("/filament/{filament_id}", response_model=schemas.Filament)
@@ -141,9 +184,37 @@ async def delete_filament(filament_id: int, db: DBSession):
 
 
 @router.get("/spool", response_model=list[schemas.Spool])
-async def list_spools(db: DBSession):
+async def list_spools(
+    response: Response,
+    db: DBSession,
+    filament_name: str | None = Query(None, alias="filament.name"),
+    filament_id: str | None = Query(None, alias="filament.id"),
+    filament_material: str | None = Query(None, alias="filament.material"),
+    vendor_name: str | None = Query(None, alias="filament.vendor.name"),
+    vendor_id: str | None = Query(None, alias="filament.vendor.id"),
+    location: str | None = Query(None),
+    lot_nr: str | None = Query(None),
+    allow_archived: bool = Query(False),
+    sort: str | None = Query(None),
+    limit: int | None = Query(None),
+    offset: int = Query(0),
+):
     svc = SpoolmanService(db)
-    return await svc.list_spools()
+    spools, total = await svc.list_spools(
+        filament_name=filament_name,
+        filament_id=filament_id,
+        filament_material=filament_material,
+        vendor_name=vendor_name,
+        vendor_id=vendor_id,
+        location=location,
+        lot_nr=lot_nr,
+        allow_archived=allow_archived,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    response.headers["x-total-count"] = str(total)
+    return spools
 
 
 @router.get("/spool/{spool_id}", response_model=schemas.Spool)
@@ -238,6 +309,183 @@ async def measure_spool(
             detail={"message": "Spool not found"},
         )
     return spool
+
+
+@router.get("/material", response_model=list[str])
+async def list_materials(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.list_materials()
+
+
+@router.get("/article-number", response_model=list[str])
+async def list_article_numbers(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.list_article_numbers()
+
+
+@router.get("/lot-number", response_model=list[str])
+async def list_lot_numbers(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.list_lot_numbers()
+
+
+@router.get("/location", response_model=list[str])
+async def list_locations(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.list_locations()
+
+
+@router.patch("/location/{location}")
+async def rename_location(location: str, data: schemas.RenameLocationBody, db: DBSession):
+    svc = SpoolmanService(db)
+    result = await svc.rename_location(location, data.name)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Location not found"},
+        )
+    return result
+
+
+@router.get("/setting/", response_model=dict[str, schemas.SettingResponse])
+async def get_all_settings(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.get_all_settings()
+
+
+@router.get("/setting/{key}", response_model=schemas.SettingResponse)
+async def get_setting(key: str, db: DBSession):
+    svc = SpoolmanService(db)
+    result = await svc.get_setting(key)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Setting not found"},
+        )
+    return result
+
+
+@router.post("/setting/{key}", response_model=schemas.SettingResponse)
+async def set_setting(key: str, db: DBSession, body: str = ""):
+    svc = SpoolmanService(db)
+    result = await svc.set_setting(key, body)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Setting not found"},
+        )
+    return result
+
+
+@router.get("/field/{entity_type}", response_model=list[schemas.ExtraField])
+async def get_extra_fields(entity_type: schemas.EntityType, db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.get_extra_fields(entity_type.value)
+
+
+@router.post("/field/{entity_type}/{key}", response_model=list[schemas.ExtraField])
+async def add_extra_field(
+    entity_type: schemas.EntityType,
+    key: str,
+    data: schemas.ExtraFieldParameters,
+    db: DBSession,
+):
+    svc = SpoolmanService(db)
+    return await svc.add_extra_field(entity_type.value, key, data.model_dump())
+
+
+@router.delete("/field/{entity_type}/{key}", response_model=list[schemas.ExtraField])
+async def delete_extra_field(entity_type: schemas.EntityType, key: str, db: DBSession):
+    svc = SpoolmanService(db)
+    result = await svc.delete_extra_field(entity_type.value, key)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Field not found"},
+        )
+    return result
+
+
+@router.get("/export/spools")
+async def export_spools(fmt: schemas.ExportFormat, db: DBSession):
+    svc = SpoolmanService(db)
+    data = await svc.export_spools()
+    if fmt == schemas.ExportFormat.json:
+        return data
+    from fastapi.responses import StreamingResponse
+    import csv
+    import io
+    output = io.StringIO()
+    if data:
+        writer = csv.DictWriter(output, fieldnames=data[0].keys())
+        writer.writeheader()
+        writer.writerows(data)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=spools.csv"},
+    )
+
+
+@router.get("/export/filaments")
+async def export_filaments(fmt: schemas.ExportFormat, db: DBSession):
+    svc = SpoolmanService(db)
+    data = await svc.export_filaments()
+    if fmt == schemas.ExportFormat.json:
+        return data
+    from fastapi.responses import StreamingResponse
+    import csv
+    import io
+    output = io.StringIO()
+    if data:
+        writer = csv.DictWriter(output, fieldnames=data[0].keys())
+        writer.writeheader()
+        writer.writerows(data)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=filaments.csv"},
+    )
+
+
+@router.get("/export/vendors")
+async def export_vendors(fmt: schemas.ExportFormat, db: DBSession):
+    svc = SpoolmanService(db)
+    data = await svc.export_vendors()
+    if fmt == schemas.ExportFormat.json:
+        return data
+    from fastapi.responses import StreamingResponse
+    import csv
+    import io
+    output = io.StringIO()
+    if data:
+        writer = csv.DictWriter(output, fieldnames=data[0].keys())
+        writer.writeheader()
+        writer.writerows(data)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=vendors.csv"},
+    )
+
+
+@router.get("/external/filament", response_model=list[schemas.ExternalFilament])
+async def get_external_filaments(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.get_external_filaments()
+
+
+@router.get("/external/material", response_model=list[schemas.ExternalMaterial])
+async def get_external_materials(db: DBSession):
+    svc = SpoolmanService(db)
+    return await svc.get_external_materials()
+
+
+@router.post("/backup", response_model=schemas.BackupResponse)
+async def backup(db: DBSession):
+    svc = SpoolmanService(db)
+    path = await svc.create_backup()
+    return schemas.BackupResponse(path=path)
 
 
 @admin_router.get("/settings", response_model=schemas.SpoolmanAPISettings)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -202,6 +203,110 @@ class HealthCheck(BaseModel):
 
 class Message(BaseModel):
     message: str
+
+
+class BackupResponse(BaseModel):
+    path: str
+
+
+# ---------------------------------------------------------------------------
+# Location
+# ---------------------------------------------------------------------------
+
+class RenameLocationBody(BaseModel):
+    """PATCH /location/{location} body."""
+    name: str
+
+
+# ---------------------------------------------------------------------------
+# Settings (Spoolman settings, not FilaMan admin settings)
+# ---------------------------------------------------------------------------
+
+class SettingResponse(BaseModel):
+    """Response for GET /setting/{key}."""
+    value: Any = None
+    is_set: bool = False
+    type: str = "string"
+
+
+# ---------------------------------------------------------------------------
+# Extra Fields
+# ---------------------------------------------------------------------------
+
+class EntityType(str, Enum):
+    vendor = "vendor"
+    filament = "filament"
+    spool = "spool"
+
+
+class ExtraFieldType(str, Enum):
+    text = "text"
+    integer = "integer"
+    integer_range = "integer_range"
+    float_type = "float"
+    float_range = "float_range"
+    datetime_type = "datetime"
+    boolean = "boolean"
+    choice = "choice"
+
+
+class ExtraField(BaseModel):
+    name: str
+    order: int = 0
+    unit: str | None = None
+    field_type: ExtraFieldType = ExtraFieldType.text
+    default_value: str | None = None
+    key: str = ""
+
+
+class ExtraFieldParameters(BaseModel):
+    """POST /field/{entity_type}/{key} body."""
+    name: str
+    order: int = 0
+    unit: str | None = None
+    field_type: ExtraFieldType = ExtraFieldType.text
+    default_value: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+class ExportFormat(str, Enum):
+    csv = "csv"
+    json = "json"
+
+
+# ---------------------------------------------------------------------------
+# External database
+# ---------------------------------------------------------------------------
+
+class ExternalFilament(BaseModel):
+    id: str
+    manufacturer: str
+    name: str
+    material: str
+    density: float
+    weight: float
+    spool_weight: float | None = None
+    spool_type: str | None = None
+    diameter: float
+    color_hex: str | None = None
+    color_hexes: list[str] | None = None
+    extruder_temp: int | None = None
+    bed_temp: int | None = None
+    finish: str | None = None
+    multi_color_direction: str | None = None
+    pattern: str | None = None
+    translucent: bool = False
+    glow: bool = False
+
+
+class ExternalMaterial(BaseModel):
+    material: str
+    density: float
+    extruder_temp: int | None = None
+    bed_temp: int | None = None
 
 
 # ---------------------------------------------------------------------------
