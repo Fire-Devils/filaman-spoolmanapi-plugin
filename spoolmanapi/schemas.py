@@ -8,7 +8,7 @@ FilaMan as if it were a Spoolman instance.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ class Vendor(BaseModel):
     comment: str | None = None
     empty_spool_weight: float | None = None
     external_id: str | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class VendorParameters(BaseModel):
@@ -34,7 +34,7 @@ class VendorParameters(BaseModel):
     comment: str | None = None
     empty_spool_weight: float | None = None
     external_id: str | None = None
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 class VendorUpdateParameters(BaseModel):
@@ -43,7 +43,7 @@ class VendorUpdateParameters(BaseModel):
     comment: str | None = None
     empty_spool_weight: float | None = None
     external_id: str | None = None
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +57,8 @@ class Filament(BaseModel):
     vendor: Vendor | None = None
     material: str | None = None
     price: float | None = None
-    density: float | None = None
-    diameter: float | None = None
+    density: float
+    diameter: float
     weight: float | None = None
     spool_weight: float | None = None
     article_number: str | None = None
@@ -69,7 +69,7 @@ class Filament(BaseModel):
     multi_color_hexes: str | None = None
     multi_color_direction: str | None = None
     external_id: str | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class FilamentParameters(BaseModel):
@@ -90,7 +90,7 @@ class FilamentParameters(BaseModel):
     multi_color_hexes: str | None = None
     multi_color_direction: str | None = None
     external_id: str | None = None
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 class FilamentUpdateParameters(BaseModel):
@@ -111,7 +111,7 @@ class FilamentUpdateParameters(BaseModel):
     multi_color_hexes: str | None = None
     multi_color_direction: str | None = None
     external_id: str | None = None
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +128,14 @@ class Spool(BaseModel):
     initial_weight: float | None = None
     spool_weight: float | None = None
     remaining_weight: float | None = None
-    used_weight: float | None = None
+    used_weight: float = 0
     remaining_length: float | None = None
-    used_length: float | None = None
+    used_length: float = 0
     location: str | None = None
     lot_nr: str | None = None
     comment: str | None = None
     archived: bool = False
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class SpoolParameters(BaseModel):
@@ -152,7 +152,7 @@ class SpoolParameters(BaseModel):
     lot_nr: str | None = None
     comment: str | None = None
     archived: bool = False
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 class SpoolUpdateParameters(BaseModel):
@@ -169,7 +169,7 @@ class SpoolUpdateParameters(BaseModel):
     lot_nr: str | None = None
     comment: str | None = None
     archived: bool | None = None
-    extra: dict[str, Any] | None = None
+    extra: dict[str, str] | None = None
 
 
 class SpoolUseParameters(BaseModel):
@@ -195,6 +195,8 @@ class Info(BaseModel):
     logs_dir: str = "/app/data/logs"
     backups_dir: str = "/app/data/backups"
     db_type: str = "sqlite"
+    git_commit: str | None = None
+    build_date: str | None = None
 
 
 class HealthCheck(BaseModel):
@@ -222,11 +224,19 @@ class RenameLocationBody(BaseModel):
 # Settings (Spoolman settings, not FilaMan admin settings)
 # ---------------------------------------------------------------------------
 
+class SettingType(str, Enum):
+    boolean = "boolean"
+    number = "number"
+    string = "string"
+    array = "array"
+    object_type = "object"
+
+
 class SettingResponse(BaseModel):
     """Response for GET /setting/{key}."""
-    value: Any = None
+    value: str = ""
     is_set: bool = False
-    type: str = "string"
+    type: SettingType = SettingType.string
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +266,10 @@ class ExtraField(BaseModel):
     unit: str | None = None
     field_type: ExtraFieldType = ExtraFieldType.text
     default_value: str | None = None
-    key: str = ""
+    key: str
+    entity_type: EntityType
+    choices: list[str] | None = None
+    multi_choice: bool | None = None
 
 
 class ExtraFieldParameters(BaseModel):
@@ -266,6 +279,8 @@ class ExtraFieldParameters(BaseModel):
     unit: str | None = None
     field_type: ExtraFieldType = ExtraFieldType.text
     default_value: str | None = None
+    choices: list[str] | None = None
+    multi_choice: bool | None = None
 
 
 # ---------------------------------------------------------------------------

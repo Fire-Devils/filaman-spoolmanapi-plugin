@@ -675,7 +675,7 @@ class SpoolmanService:
         return settings.get(key)
 
     async def set_setting(self, key: str, value: Any) -> dict | None:
-        return {"value": value, "is_set": True, "type": "string"}
+        return {"value": str(value), "is_set": True, "type": "string"}
 
     async def get_extra_fields(self, entity_type: str) -> list:
         return []
@@ -706,7 +706,7 @@ class SpoolmanService:
             comment=comment,
             empty_spool_weight=manufacturer.empty_spool_weight_g,
             external_id=external_id,
-            extra=extra,
+            extra={k: str(v) for k, v in extra.items()},
         )
 
     def _filament_to_schema(self, filament: Filament) -> schemas.Filament:
@@ -742,8 +742,8 @@ class SpoolmanService:
             vendor=vendor,
             material=filament.material_type,
             price=filament.price,
-            density=filament.density_g_cm3,
-            diameter=filament.diameter_mm,
+            density=filament.density_g_cm3 or 1.24,
+            diameter=filament.diameter_mm or 1.75,
             weight=filament.raw_material_weight_g,
             spool_weight=filament.default_spool_weight_g,
             article_number=article_number,
@@ -754,7 +754,7 @@ class SpoolmanService:
             multi_color_hexes=multi_color_hexes,
             multi_color_direction=filament.multi_color_style,
             external_id=external_id,
-            extra=custom_fields,
+            extra={k: str(v) for k, v in custom_fields.items()},
         )
 
     async def _find_or_create_color(self, hex_code: str) -> Color:
@@ -854,14 +854,14 @@ class SpoolmanService:
             initial_weight=initial_weight,
             spool_weight=spool.empty_spool_weight_g,
             remaining_weight=spool.remaining_weight_g,
-            used_weight=used_weight,
+            used_weight=used_weight if used_weight is not None else 0.0,
             remaining_length=remaining_length,
-            used_length=used_length,
+            used_length=used_length if used_length is not None else 0.0,
             location=spool.location.name if spool.location else None,
             lot_nr=spool.lot_number,
             comment=comment,
             archived=spool.status.key == "archived" if spool.status else False,
-            extra=custom_fields,
+            extra={k: str(v) for k, v in custom_fields.items()},
         )
 
     async def _resolve_location(self, name: str | None) -> int | None:
