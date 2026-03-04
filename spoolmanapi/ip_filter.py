@@ -11,7 +11,8 @@ from __future__ import annotations
 import ipaddress
 import logging
 
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import HTTPException, WebSocket, status
+from starlette.requests import HTTPConnection
 
 from .settings import load_settings
 
@@ -53,17 +54,24 @@ def _ip_matches(client_ip: str, patterns: list[str]) -> bool:
     return False
 
 
-async def require_ip_access(request: Request) -> None:
+async def require_ip_access(conn: HTTPConnection) -> None:
     """FastAPI dependency that enforces the IP allow-list.
 
     Raises 403 when the client IP is not permitted.
+    WebSocket connections are skipped here — they are filtered
+    separately by :func:`check_ws_ip_access` in the WS handler.
     """
+    # Router dependencies are evaluated for WebSocket routes too, but
+    # HTTPException cannot be sent over a WS handshake.  The WS handler
+    # calls check_ws_ip_access() instead.
+    if conn.scope.get("type") == "websocket":
+        return
     settings = await load_settings()
 
     if not settings.ip_filter_enabled:
         return  # IP check disabled – allow all
 
-    client_ip = request.client.host if request.client else None
+    client_ip = conn.client.host if conn.client else None
     if client_ip is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

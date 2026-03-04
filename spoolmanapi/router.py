@@ -6,6 +6,7 @@ plus admin endpoints for managing the plugin's IP-filter settings.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import RedirectResponse
 
 from app.api.deps import DBSession, RequirePermission
 
@@ -564,3 +565,26 @@ async def ws_vendor(websocket: WebSocket) -> None:
 @router.websocket("/vendor/{vendor_id}")
 async def ws_vendor_id(websocket: WebSocket, vendor_id: int) -> None:
     await _handle_ws(websocket, ("vendor", str(vendor_id)))
+
+
+# ---------------------------------------------------------------------------
+# Wrapper router: provides a root redirect and re-exports all API routes.
+# The plugin loader picks up the module-level `router` name, so we swap it
+# here *after* all endpoints have been registered on the original APIRouter.
+# ---------------------------------------------------------------------------
+
+_api_router = router  # keep reference to the fully-populated API router
+router = APIRouter()  # new wrapper without prefix (mounted at /spoolman)
+router.include_router(_api_router)
+
+
+@router.get("/", include_in_schema=False)
+async def redirect_to_root():
+    """Redirect bare /spoolman/ hits to the application root."""
+    return RedirectResponse(url="/", status_code=302)
+
+
+@router.get("", include_in_schema=False)
+async def redirect_to_root_no_slash():
+    """Redirect bare /spoolman (no trailing slash) to the application root."""
+    return RedirectResponse(url="/", status_code=302)
