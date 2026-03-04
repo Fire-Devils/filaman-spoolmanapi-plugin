@@ -11,7 +11,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, WebSocket, status
 
 from .settings import load_settings
 
@@ -76,3 +76,19 @@ async def require_ip_access(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"IP {client_ip} ist nicht in der Allowlist",
         )
+
+
+async def check_ws_ip_access(websocket: WebSocket) -> bool:
+    """Return True if the WebSocket client is allowed by the IP filter.
+
+    Unlike ``require_ip_access`` (an HTTP dependency that raises 403),
+    this function returns a bool so that the WebSocket handler can
+    close the connection gracefully with a proper close code.
+    """
+    settings = await load_settings()
+    if not settings.ip_filter_enabled:
+        return True
+    client_ip = websocket.client.host if websocket.client else None
+    if client_ip is None:
+        return False
+    return _ip_matches(client_ip, settings.allowed_ips)

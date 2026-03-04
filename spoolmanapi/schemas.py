@@ -210,6 +210,23 @@ class Message(BaseModel):
 class BackupResponse(BaseModel):
     path: str
 
+# ---------------------------------------------------------------------------
+# WebSocket events
+# ---------------------------------------------------------------------------
+
+
+class EventType(str, Enum):
+    added = "added"
+    updated = "updated"
+    deleted = "deleted"
+
+
+class Event(BaseModel):
+    """WebSocket push event matching Spoolman's event format."""
+    type: EventType
+    resource: str
+    date: datetime
+    payload: dict
 
 # ---------------------------------------------------------------------------
 # Location

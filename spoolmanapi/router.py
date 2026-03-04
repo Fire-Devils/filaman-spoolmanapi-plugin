@@ -5,17 +5,19 @@ plus admin endpoints for managing the plugin's IP-filter settings.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 
 from app.api.deps import DBSession, RequirePermission
 
 from . import schemas
-from .ip_filter import require_ip_access
 from .service import SpoolmanService
+from .ip_filter import check_ws_ip_access, require_ip_access
 from .settings import load_settings, save_settings
+from .ws import websocket_manager
 
 # Main Spoolman-compatible router — IP-filtered, no auth required
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_ip_access)])
+
 
 # Admin router for plugin settings — auth-protected, no IP filter
 admin_router = APIRouter(
@@ -504,3 +506,61 @@ async def update_settings(
 ):
     await save_settings(data)
     return data
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoints (mirror Spoolman's push notification channels)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_ws(websocket: WebSocket, pool: tuple[str, ...]) -> None:
+    """Accept a WebSocket connection and keep it alive in the given pool.
+
+    Responds to any incoming text with a health status (ping/pong).
+    """
+    if not await check_ws_ip_access(websocket):
+        await websocket.close(code=1008, reason="IP not allowed")
+        return
+    await websocket.accept()
+    websocket_manager.connect(pool, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+            await websocket.send_json({"status": "healthy"})
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(pool, websocket)
+
+
+@router.websocket("/")
+async def ws_root(websocket: WebSocket) -> None:
+    await _handle_ws(websocket, ())
+
+
+@router.websocket("/spool")
+async def ws_spool(websocket: WebSocket) -> None:
+    await _handle_ws(websocket, ("spool",))
+
+
+@router.websocket("/spool/{spool_id}")
+async def ws_spool_id(websocket: WebSocket, spool_id: int) -> None:
+    await _handle_ws(websocket, ("spool", str(spool_id)))
+
+
+@router.websocket("/filament")
+async def ws_filament(websocket: WebSocket) -> None:
+    await _handle_ws(websocket, ("filament",))
+
+
+@router.websocket("/filament/{filament_id}")
+async def ws_filament_id(websocket: WebSocket, filament_id: int) -> None:
+    await _handle_ws(websocket, ("filament", str(filament_id)))
+
+
+@router.websocket("/vendor")
+async def ws_vendor(websocket: WebSocket) -> None:
+    await _handle_ws(websocket, ("vendor",))
+
+
+@router.websocket("/vendor/{vendor_id}")
+async def ws_vendor_id(websocket: WebSocket, vendor_id: int) -> None:
+    await _handle_ws(websocket, ("vendor", str(vendor_id)))

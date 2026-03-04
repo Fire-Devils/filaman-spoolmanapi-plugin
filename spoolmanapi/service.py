@@ -16,6 +16,7 @@ from app.models.location import Location
 from app.services.spool_service import SpoolService
 
 from . import schemas
+from .ws import websocket_manager
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,25 @@ def _length_to_weight_g(length_mm: float, diameter_mm: float, density_g_cm3: flo
 class SpoolmanService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _emit_event(
+        self,
+        resource: str,
+        resource_id: int,
+        event_type: schemas.EventType,
+        payload: object,
+    ) -> None:
+        """Broadcast a WebSocket event to all subscribers."""
+        try:
+            event = schemas.Event(
+                type=event_type,
+                resource=resource,
+                date=datetime.now(timezone.utc),
+                payload=payload.model_dump(mode="json") if hasattr(payload, "model_dump") else {},
+            )
+            await websocket_manager.send((resource, str(resource_id)), event)
+        except Exception:
+            logger.debug("Failed to emit WS event for %s/%s", resource, resource_id, exc_info=True)
 
     async def list_vendors(
         self,
@@ -100,7 +120,9 @@ class SpoolmanService:
         self.db.add(vendor)
         await self.db.commit()
         vendor = await self._get_manufacturer(vendor.id)
-        return self._manufacturer_to_vendor(vendor)
+        result = self._manufacturer_to_vendor(vendor)
+        await self._emit_event("vendor", vendor.id, schemas.EventType.added, result)
+        return result
 
     async def update_vendor(self, vendor_id: int, data: schemas.VendorUpdateParameters) -> schemas.Vendor | None:
         result = await self.db.execute(select(Manufacturer).where(Manufacturer.id == vendor_id))
@@ -131,15 +153,19 @@ class SpoolmanService:
         vendor.custom_fields = custom_fields or None
         await self.db.commit()
         vendor = await self._get_manufacturer(vendor.id)
-        return self._manufacturer_to_vendor(vendor)
+        result = self._manufacturer_to_vendor(vendor)
+        await self._emit_event("vendor", vendor.id, schemas.EventType.updated, result)
+        return result
 
     async def delete_vendor(self, vendor_id: int) -> bool:
         result = await self.db.execute(select(Manufacturer).where(Manufacturer.id == vendor_id))
         vendor = result.scalar_one_or_none()
         if not vendor:
             return False
+        schema = self._manufacturer_to_vendor(vendor)
         await self.db.delete(vendor)
         await self.db.commit()
+        await self._emit_event("vendor", vendor_id, schemas.EventType.deleted, schema)
         return True
 
     async def list_filaments(
@@ -257,7 +283,9 @@ class SpoolmanService:
         await self._apply_filament_colors(filament, data.color_hex, data.multi_color_hexes)
         await self.db.commit()
         filament = await self._get_filament(filament.id)
-        return self._filament_to_schema(filament)
+        result = self._filament_to_schema(filament)
+        await self._emit_event("filament", filament.id, schemas.EventType.added, result)
+        return result
 
     async def update_filament(self, filament_id: int, data: schemas.FilamentUpdateParameters) -> schemas.Filament | None:
         filament = await self._get_filament(filament_id)
@@ -328,14 +356,18 @@ class SpoolmanService:
 
         await self.db.commit()
         filament = await self._get_filament(filament.id)
-        return self._filament_to_schema(filament)
+        result = self._filament_to_schema(filament)
+        await self._emit_event("filament", filament.id, schemas.EventType.updated, result)
+        return result
 
     async def delete_filament(self, filament_id: int) -> bool:
         filament = await self._get_filament(filament_id)
         if not filament:
             return False
+        schema = self._filament_to_schema(filament)
         await self.db.delete(filament)
         await self.db.commit()
+        await self._emit_event("filament", filament_id, schemas.EventType.deleted, schema)
         return True
 
     async def list_spools(
@@ -449,7 +481,9 @@ class SpoolmanService:
         self.db.add(spool)
         await self.db.commit()
         spool = await self._get_spool(spool.id)
-        return self._spool_to_schema(spool)
+        result = self._spool_to_schema(spool)
+        await self._emit_event("spool", spool.id, schemas.EventType.added, result)
+        return result
 
     async def update_spool(self, spool_id: int, data: schemas.SpoolUpdateParameters) -> schemas.Spool | None:
         spool = await self._get_spool(spool_id)
@@ -495,14 +529,18 @@ class SpoolmanService:
 
         await self.db.commit()
         spool = await self._get_spool(spool.id)
-        return self._spool_to_schema(spool)
+        result = self._spool_to_schema(spool)
+        await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
+        return result
 
     async def delete_spool(self, spool_id: int) -> bool:
         spool = await self._get_spool(spool_id)
         if not spool:
             return False
+        schema = self._spool_to_schema(spool)
         spool.status_id = await self._resolve_status(True)
         await self.db.commit()
+        await self._emit_event("spool", spool_id, schemas.EventType.deleted, schema)
         return True
 
     async def use_spool(self, spool_id: int, data: schemas.SpoolUseParameters) -> schemas.Spool | None:
@@ -532,7 +570,9 @@ class SpoolmanService:
                 logger.warning("Cannot convert length to weight: missing filament data for spool %s", spool.id)
 
         spool = await self._get_spool(spool.id)
-        return self._spool_to_schema(spool)
+        result = self._spool_to_schema(spool)
+        await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
+        return result
 
     async def measure_spool(self, spool_id: int, data: schemas.SpoolMeasureParameters) -> schemas.Spool | None:
         spool = await self._get_spool(spool_id)
@@ -547,7 +587,9 @@ class SpoolmanService:
             source="spoolman_api",
         )
         spool = await self._get_spool(spool.id)
-        return self._spool_to_schema(spool)
+        result = self._spool_to_schema(spool)
+        await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
+        return result
 
     async def list_materials(self) -> list[str]:
         result = await self.db.execute(select(Filament.material_type).distinct().order_by(Filament.material_type))
