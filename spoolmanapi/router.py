@@ -3,9 +3,19 @@
 Exposes vendor/filament/spool endpoints that mirror the Spoolman v1 API,
 plus admin endpoints for managing the plugin's IP-filter settings.
 """
+
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import DBSession, RequirePermission
@@ -339,7 +349,9 @@ async def list_locations(db: DBSession):
 
 
 @router.patch("/location/{location}")
-async def rename_location(location: str, data: schemas.RenameLocationBody, db: DBSession):
+async def rename_location(
+    location: str, data: schemas.RenameLocationBody, db: DBSession
+):
     svc = SpoolmanService(db)
     result = await svc.rename_location(location, data.name)
     if result is None:
@@ -418,6 +430,7 @@ async def export_spools(fmt: schemas.ExportFormat, db: DBSession):
     from fastapi.responses import StreamingResponse
     import csv
     import io
+
     output = io.StringIO()
     if data:
         writer = csv.DictWriter(output, fieldnames=data[0].keys())
@@ -439,6 +452,7 @@ async def export_filaments(fmt: schemas.ExportFormat, db: DBSession):
     from fastapi.responses import StreamingResponse
     import csv
     import io
+
     output = io.StringIO()
     if data:
         writer = csv.DictWriter(output, fieldnames=data[0].keys())
@@ -460,6 +474,7 @@ async def export_vendors(fmt: schemas.ExportFormat, db: DBSession):
     from fastapi.responses import StreamingResponse
     import csv
     import io
+
     output = io.StringIO()
     if data:
         writer = csv.DictWriter(output, fieldnames=data[0].keys())
@@ -588,3 +603,13 @@ async def redirect_to_root():
 async def redirect_to_root_no_slash():
     """Redirect bare /spoolman (no trailing slash) to the application root."""
     return RedirectResponse(url="/", status_code=302)
+
+
+@router.get("/spool/show/{spool_id}", include_in_schema=False)
+async def redirect_to_filaman_spool_detail(spool_id: int):
+    """Redirect Spoolman spool detail URL to FilaMan spool details page.
+
+    Bambuddy uses the original Spoolman URL pattern /spool/show/{id} for
+    backlinks. This redirect maps it to FilaMan's detail page at /spools/{id}.
+    """
+    return RedirectResponse(url=f"/spools/{spool_id}", status_code=302)
