@@ -613,3 +613,15 @@ async def redirect_to_filaman_spool_detail(spool_id: int):
     backlinks. This redirect maps it to FilaMan's detail page at /spools/{id}.
     """
     return RedirectResponse(url=f"/spools/{spool_id}", status_code=302)
+
+
+@router.get("/spool/{spool_id}", include_in_schema=False)
+async def redirect_spool_detail_to_filaman(spool_id: int):
+    """Redirect /spoolman/spool/{id} to FilaMan spool detail page."""
+    return RedirectResponse(url=f"/spools/{spool_id}", status_code=302)
+
+
+@router.get("/spool", include_in_schema=False)
+async def redirect_spool_list_to_filaman():
+    """Redirect /spoolman/spool to FilaMan spool overview."""
+    return RedirectResponse(url="/spools", status_code=302)
