@@ -538,7 +538,7 @@ class SpoolmanService:
         if not spool:
             return False
         schema = self._spool_to_schema(spool)
-        spool.status_id = await self._resolve_status(True)
+        await self.db.delete(spool)
         await self.db.commit()
         await self._emit_event("spool", spool_id, schemas.EventType.deleted, schema)
         return True
