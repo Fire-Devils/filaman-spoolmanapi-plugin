@@ -47,7 +47,7 @@ http://<filaman-host>:8000/spoolman/api/v1/
 | GET/POST | `/filament` | List / create filaments |
 | GET/PATCH/DELETE | `/filament/{id}` | Get / update / delete filament |
 | GET/POST | `/spool` | List / create spools |
-| GET/PATCH/DELETE | `/spool/{id}` | Get / update / delete spool |
+| GET/PATCH/DELETE | `/spool/{id}` | Get / update / permanently delete spool |
 | PUT | `/spool/{id}/use` | Use filament from spool |
 | PUT | `/spool/{id}/measure` | Measure spool weight |
 | GET | `/material` | List materials |
@@ -58,6 +58,10 @@ http://<filaman-host>:8000/spoolman/api/v1/
 | GET | `/export/filaments` | Export filaments (CSV/JSON) |
 | GET | `/export/vendors` | Export vendors (CSV/JSON) |
 | POST | `/backup` | Create backup |
+
+### Delete semantics
+
+`DELETE /spool/{id}` permanently removes the spool from FilaMan instead of only archiving it, matching Spoolman-compatible clients that expect a deleted spool to disappear from subsequent list/detail calls.
 
 ## License
 
