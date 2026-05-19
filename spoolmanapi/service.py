@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.filament import Manufacturer, Filament, Color, FilamentColor
-from app.models.spool import Spool, SpoolStatus
+from app.models.spool import Spool, SpoolEvent, SpoolStatus
 from app.models.location import Location
 from app.services.spool_service import SpoolService
 
@@ -491,6 +491,12 @@ class SpoolmanService:
             return None
 
         payload = data.model_dump(exclude_unset=True)
+        weight_keys = ("initial_weight", "spool_weight", "remaining_weight", "used_weight")
+        weight_changes_requested = [key for key in weight_keys if key in payload]
+        old_initial_total_weight_g = spool.initial_total_weight_g
+        old_empty_spool_weight_g = spool.empty_spool_weight_g
+        old_remaining_weight_g = spool.remaining_weight_g
+
         if "filament_id" in payload:
             spool.filament_id = payload["filament_id"]
         if "first_used" in payload:
@@ -518,13 +524,50 @@ class SpoolmanService:
             custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
         spool.custom_fields = custom_fields or None
 
-        if any(key in payload for key in ("initial_weight", "spool_weight", "remaining_weight", "used_weight")):
+        if weight_changes_requested:
             self._apply_spool_weights(
                 spool,
                 payload.get("initial_weight"),
                 payload.get("spool_weight"),
                 payload.get("remaining_weight"),
                 payload.get("used_weight"),
+            )
+
+            delta_weight_g: float | None = None
+            if (
+                old_remaining_weight_g is not None
+                and spool.remaining_weight_g is not None
+            ):
+                delta_weight_g = spool.remaining_weight_g - old_remaining_weight_g
+
+            event_meta: dict[str, Any] = {
+                "source": "spoolmanapi.update_spool",
+                "changed_fields": weight_changes_requested,
+                "requested_values": {
+                    key: payload[key] for key in weight_changes_requested
+                },
+                "before": {
+                    "initial_total_weight_g": old_initial_total_weight_g,
+                    "empty_spool_weight_g": old_empty_spool_weight_g,
+                    "remaining_weight_g": old_remaining_weight_g,
+                },
+                "after": {
+                    "initial_total_weight_g": spool.initial_total_weight_g,
+                    "empty_spool_weight_g": spool.empty_spool_weight_g,
+                    "remaining_weight_g": spool.remaining_weight_g,
+                },
+            }
+
+            self.db.add(
+                SpoolEvent(
+                    spool_id=spool.id,
+                    event_type="external_update",
+                    event_at=datetime.now(timezone.utc),
+                    source="spoolman_api",
+                    delta_weight_g=delta_weight_g,
+                    note="Weight updated via Spoolman API",
+                    meta=event_meta,
+                )
             )
 
         await self.db.commit()

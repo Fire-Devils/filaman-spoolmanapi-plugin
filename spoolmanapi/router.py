@@ -624,4 +624,4 @@ async def redirect_spool_detail_to_filaman(spool_id: int):
 @router.get("/spool", include_in_schema=False)
 async def redirect_spool_list_to_filaman():
     """Redirect /spoolman/spool to FilaMan spool overview."""
-    return RedirectResponse(url="/spools", status_code=302)
+    return RedirectResponse(url="/spools/", status_code=302)
