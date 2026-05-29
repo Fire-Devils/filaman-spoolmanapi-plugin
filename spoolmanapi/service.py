@@ -795,6 +795,21 @@ class SpoolmanService:
             extra={k: json.dumps(v) for k, v in extra.items()},
         )
 
+    @staticmethod
+    def _to_rgb_hex(hex_code: str) -> str:
+        """Convert a stored hex code to a 6-char RGB string for the Spoolman API.
+
+        FilaMan may store alpha-aware 9-char values (``#RRGGBBAA``) once alpha
+        color support is introduced.  The Spoolman HTTP API and Moonraker's AFC
+        integration only understand 6-char ``RRGGBB`` strings (no leading ``#``),
+        so strip the alpha channel when present.
+        """
+        raw = hex_code.lstrip("#")
+        if len(raw) == 8:
+            # RRGGBBAA → RRGGBB
+            return raw[:6]
+        return raw
+
     def _filament_to_schema(self, filament: Filament) -> schemas.Filament:
         vendor = self._manufacturer_to_vendor(filament.manufacturer) if filament.manufacturer else None
         colors = sorted(filament.filament_colors or [], key=lambda item: item.position)
@@ -802,13 +817,13 @@ class SpoolmanService:
         if colors:
             primary = next((item for item in colors if item.position == 1), colors[0])
             if primary.color and primary.color.hex_code:
-                primary_color = primary.color.hex_code.lstrip("#")
+                primary_color = self._to_rgb_hex(primary.color.hex_code)
 
         if filament.color_mode == "multi":
-            multi_colors = [item.color.hex_code.lstrip("#") for item in colors if item.color and item.color.hex_code]
+            multi_colors = [self._to_rgb_hex(item.color.hex_code) for item in colors if item.color and item.color.hex_code]
         else:
             multi_colors = [
-                item.color.hex_code.lstrip("#")
+                self._to_rgb_hex(item.color.hex_code)
                 for item in colors
                 if item.position > 1 and item.color and item.color.hex_code
             ]
