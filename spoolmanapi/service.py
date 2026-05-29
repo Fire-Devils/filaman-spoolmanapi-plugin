@@ -812,7 +812,7 @@ class SpoolmanService:
                 for item in colors
                 if item.position > 1 and item.color and item.color.hex_code
             ]
-        multi_color_hexes = ",".join(multi_colors) if multi_colors else ""
+        multi_color_hexes = ",".join(multi_colors) if multi_colors else None
 
         custom_fields = dict(filament.custom_fields or {})
         article_number = custom_fields.pop("article_number", None)
