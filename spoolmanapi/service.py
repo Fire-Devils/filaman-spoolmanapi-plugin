@@ -278,6 +278,11 @@ class SpoolmanService:
             multi_color_style=data.multi_color_direction,
             custom_fields=custom_fields or None,
         )
+        # Initialize the collection on the fresh object so the append() in
+        # _apply_filament_colors does not trigger an async lazy-load on a
+        # persistent-but-unloaded relationship (raises MissingGreenlet under
+        # aiosqlite). The update path eager-loads via _get_filament; create did not.
+        filament.filament_colors = []
         self.db.add(filament)
         await self.db.flush()
         await self._apply_filament_colors(filament, data.color_hex, data.multi_color_hexes)
