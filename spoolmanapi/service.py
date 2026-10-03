@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,15 +11,88 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.rfid import rfid_hex_key, rfid_storage_value, rfid_uids_equal
 from app.models.filament import Manufacturer, Filament, Color, FilamentColor
 from app.models.spool import Spool, SpoolEvent, SpoolStatus
+from app.models.tag_reader import TagReader as FilaManTagReader
 from app.models.location import Location
 from app.services.spool_service import SpoolService
 
 from . import schemas
+from .settings import load_settings
 from .ws import websocket_manager
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_tag_uid(uid: str) -> str:
+    normalized = rfid_hex_key(uid) or uid.strip().upper()
+    if not normalized:
+        raise ValueError("A tag UID must not be empty.")
+    return normalized
+
+
+def _native_spool_tag_values(spool: Spool) -> list[str]:
+    values: list[str] = []
+    for field_name in ("rfid_uid", "rfid_uid_2"):
+        value = rfid_storage_value(getattr(spool, field_name, None))
+        if value is None:
+            continue
+        if not any(rfid_uids_equal(value, seen) for seen in values):
+            values.append(value)
+    return values[:2]
+
+
+def _set_native_spool_tag_values(spool: Spool, values: list[str]) -> None:
+    for field_name in ("rfid_uid", "rfid_uid_2"):
+        if hasattr(spool, field_name):
+            setattr(spool, field_name, None)
+
+    for field_name, value in zip(("rfid_uid", "rfid_uid_2"), values[:2]):
+        if hasattr(spool, field_name):
+            setattr(spool, field_name, rfid_storage_value(value))
+
+
+def _card_uid_values(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        raise ValueError("extra.card_uids must be a comma-separated string of tag UIDs.")
+
+    values: list[str] = []
+    for uid in value.split(","):
+        uid = uid.strip()
+        if not uid:
+            continue
+        storage_uid = rfid_storage_value(uid)
+        if storage_uid is None:
+            raise ValueError("A tag UID must not be empty.")
+        if not any(rfid_uids_equal(storage_uid, seen) for seen in values):
+            values.append(storage_uid)
+    return values[:2]
+
+
+def _legacy_spool_tag_values(spool: Spool) -> list[str]:
+    custom_fields = spool.custom_fields or {}
+    if "card_uids" not in custom_fields:
+        return []
+    return _card_uid_values(custom_fields["card_uids"])
+
+
+def _effective_spool_tag_values(spool: Spool) -> list[str]:
+    values = _native_spool_tag_values(spool)
+    if values:
+        return values
+    return _legacy_spool_tag_values(spool)
+
+
+def _clear_legacy_card_uids(spool: Spool) -> None:
+    custom_fields = dict(spool.custom_fields or {})
+    if "card_uids" in custom_fields:
+        custom_fields.pop("card_uids")
+        spool.custom_fields = custom_fields or None
+
+
+def _decode_extra(extra: dict[str, str] | None) -> dict[str, Any]:
+    return {key: json.loads(value) for key, value in (extra or {}).items()}
 
 
 def _weight_to_length_mm(weight_g: float, diameter_mm: float, density_g_cm3: float) -> float:
@@ -177,10 +251,12 @@ class SpoolmanService:
         article_number: str | None = None,
         color_hex: str | None = None,
         external_id: str | None = None,
+        tag: str | None = None,
         sort: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[schemas.Filament], int]:
+        normalized_tag = normalize_tag_uid(tag) if tag is not None else None
         query = (
             select(Filament)
             .options(
@@ -236,12 +312,22 @@ class SpoolmanService:
             default_column=Filament.id,
         )
 
-        total_count = await self._count_query(query, Filament.id)
-        query = self._apply_pagination(query, limit, offset)
+        if normalized_tag is None:
+            total_count = await self._count_query(query, Filament.id)
+            query = self._apply_pagination(query, limit, offset)
 
         result = await self.db.execute(query)
         filaments = result.scalars().unique().all()
-        return [self._filament_to_schema(filament) for filament in filaments], total_count
+        items = [self._filament_to_schema(filament) for filament in filaments]
+        if normalized_tag is not None:
+            items = [
+                item
+                for item in items
+                if any(rfid_uids_equal(tag.uid, normalized_tag) for tag in item.tags)
+            ]
+            total_count = len(items)
+            items = items[offset : offset + limit] if limit is not None else items[offset:]
+        return items, total_count
 
     async def get_filament(self, filament_id: int) -> schemas.Filament | None:
         filament = await self._get_filament(filament_id)
@@ -252,7 +338,7 @@ class SpoolmanService:
     async def create_filament(self, data: schemas.FilamentParameters) -> schemas.Filament:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
+            custom_fields.update(_decode_extra(data.extra))
         if data.article_number is not None:
             custom_fields["article_number"] = data.article_number
         if data.comment is not None:
@@ -344,7 +430,7 @@ class SpoolmanService:
             else:
                 custom_fields["external_id"] = payload["external_id"]
         if "extra" in payload and payload["extra"]:
-            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
+            custom_fields.update(_decode_extra(payload["extra"]))
 
         filament.custom_fields = custom_fields or None
 
@@ -384,11 +470,13 @@ class SpoolmanService:
         vendor_id: str | None = None,
         location: str | None = None,
         lot_nr: str | None = None,
+        tag: str | None = None,
         allow_archived: bool = False,
         sort: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[schemas.Spool], int]:
+        normalized_tag = normalize_tag_uid(tag) if tag is not None else None
         query = (
             select(Spool)
             .options(
@@ -447,12 +535,22 @@ class SpoolmanService:
             default_column=Spool.id,
         )
 
-        total_count = await self._count_query(query, Spool.id)
-        query = self._apply_pagination(query, limit, offset)
+        if normalized_tag is None:
+            total_count = await self._count_query(query, Spool.id)
+            query = self._apply_pagination(query, limit, offset)
 
         result = await self.db.execute(query)
         spools = result.scalars().unique().all()
-        return [self._spool_to_schema(spool) for spool in spools], total_count
+        items = [self._spool_to_schema(spool) for spool in spools]
+        if normalized_tag is not None:
+            items = [
+                item
+                for item in items
+                if any(rfid_uids_equal(tag.uid, normalized_tag) for tag in item.tags)
+            ]
+            total_count = len(items)
+            items = items[offset : offset + limit] if limit is not None else items[offset:]
+        return items, total_count
 
     async def get_spool(self, spool_id: int) -> schemas.Spool | None:
         spool = await self._get_spool(spool_id)
@@ -463,7 +561,10 @@ class SpoolmanService:
     async def create_spool(self, data: schemas.SpoolParameters) -> schemas.Spool:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
+            custom_fields.update(_decode_extra(data.extra))
+        legacy_card_uids: list[str] | None = None
+        if "card_uids" in custom_fields:
+            legacy_card_uids = _card_uid_values(custom_fields.pop("card_uids"))
         if data.comment is not None:
             custom_fields["comment"] = data.comment
 
@@ -484,10 +585,15 @@ class SpoolmanService:
 
         self._apply_spool_weights(spool, data.initial_weight, data.spool_weight, data.remaining_weight, data.used_weight)
         self.db.add(spool)
+        displaced_owner_ids: list[int] = []
+        if legacy_card_uids is not None:
+            await self.db.flush()
+            displaced_owner_ids = await self._replace_spool_tags(spool, legacy_card_uids)
         await self.db.commit()
         spool = await self._get_spool(spool.id)
         result = self._spool_to_schema(spool)
         await self._emit_event("spool", spool.id, schemas.EventType.added, result)
+        await self._emit_spool_updates(displaced_owner_ids)
         return result
 
     async def update_spool(self, spool_id: int, data: schemas.SpoolUpdateParameters) -> schemas.Spool | None:
@@ -520,13 +626,29 @@ class SpoolmanService:
             spool.status_id = await self._resolve_status(payload["archived"])
 
         custom_fields = dict(spool.custom_fields or {})
+        displaced_owner_ids: list[int] = []
+        has_legacy_card_uids = "card_uids" in custom_fields
+        card_uids_was_supplied = False
+        legacy_card_uids = custom_fields.pop("card_uids", None)
+        if "extra" in payload and payload["extra"]:
+            decoded_extra = _decode_extra(payload["extra"])
+            if "card_uids" in decoded_extra:
+                legacy_card_uids = decoded_extra.pop("card_uids")
+                has_legacy_card_uids = True
+                card_uids_was_supplied = True
+            custom_fields.update(decoded_extra)
+        if has_legacy_card_uids and (
+            card_uids_was_supplied or not _native_spool_tag_values(spool)
+        ):
+            displaced_owner_ids = await self._replace_spool_tags(
+                spool,
+                _card_uid_values(legacy_card_uids),
+            )
         if "comment" in payload:
             if payload["comment"] is None:
                 custom_fields.pop("comment", None)
             else:
                 custom_fields["comment"] = payload["comment"]
-        if "extra" in payload and payload["extra"]:
-            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
         spool.custom_fields = custom_fields or None
 
         if weight_changes_requested:
@@ -579,7 +701,40 @@ class SpoolmanService:
         spool = await self._get_spool(spool.id)
         result = self._spool_to_schema(spool)
         await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
+        await self._emit_spool_updates(displaced_owner_ids)
         return result
+
+    async def _replace_spool_tags(self, target: Spool, values: list[str]) -> list[int]:
+        result = await self.db.execute(select(Spool))
+        displaced_owner_ids: list[int] = []
+        for previous_owner in result.scalars().all():
+            if previous_owner.id == target.id:
+                continue
+            previous_tags = _effective_spool_tag_values(previous_owner)
+            remaining = [
+                tag
+                for tag in previous_tags
+                if not any(rfid_uids_equal(tag, uid) for uid in values)
+            ]
+            if len(remaining) != len(previous_tags):
+                _set_native_spool_tag_values(previous_owner, remaining)
+                _clear_legacy_card_uids(previous_owner)
+                displaced_owner_ids.append(previous_owner.id)
+
+        _set_native_spool_tag_values(target, values)
+        _clear_legacy_card_uids(target)
+        return displaced_owner_ids
+
+    async def _emit_spool_updates(self, spool_ids: list[int]) -> None:
+        for spool_id in spool_ids:
+            spool = await self._get_spool(spool_id)
+            if spool is not None:
+                await self._emit_event(
+                    "spool",
+                    spool_id,
+                    schemas.EventType.updated,
+                    self._spool_to_schema(spool),
+                )
 
     async def delete_spool(self, spool_id: int) -> bool:
         spool = await self._get_spool(spool_id)
@@ -638,6 +793,190 @@ class SpoolmanService:
         result = self._spool_to_schema(spool)
         await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
         return result
+
+    async def _find_tag_owner(self, uid: str) -> tuple[str, int, schemas.Tag] | None:
+        result = await self.db.execute(select(Spool))
+        spools = result.scalars().all()
+        for spool in spools:
+            for tag_uid in _native_spool_tag_values(spool):
+                if rfid_uids_equal(tag_uid, uid):
+                    return "spool", spool.id, schemas.Tag(uid=tag_uid, format=None, added=datetime.now(timezone.utc))
+        for spool in spools:
+            for tag_uid in _legacy_spool_tag_values(spool):
+                if rfid_uids_equal(tag_uid, uid):
+                    return "spool", spool.id, schemas.Tag(uid=tag_uid, format=None, added=datetime.now(timezone.utc))
+        return None
+
+    async def link_tag(
+        self,
+        target_type: str,
+        target_id: int,
+        uid: str,
+        tag_format: str | None = None,
+    ) -> schemas.Tag | None:
+        storage_uid = rfid_storage_value(uid)
+        uid = normalize_tag_uid(uid)
+        if storage_uid is None:
+            raise ValueError("A tag UID must not be empty.")
+        tag_format = tag_format.strip().lower() if tag_format and tag_format.strip() else None
+        if tag_format is not None and len(tag_format) > 32:
+            raise ValueError("A tag format can be at most 32 characters.")
+
+        if target_type != "spool":
+            raise ValueError("Filament tags are not supported; only spool.rfid_uid and spool.rfid_uid_2 are used.")
+
+        target = await self._get_spool(target_id)
+        if target is None:
+            return None
+
+        owner = await self._find_tag_owner(uid)
+        if owner is not None and owner[:2] != (target_type, target_id):
+            kind, owner_id, _ = owner
+            if kind == "spool":
+                previous_owner = await self._get_spool(owner_id)
+                if previous_owner is not None:
+                    previous_tags = [
+                        tag
+                        for tag in _effective_spool_tag_values(previous_owner)
+                        if not rfid_uids_equal(tag, uid)
+                    ]
+                    _set_native_spool_tag_values(previous_owner, previous_tags)
+                    _clear_legacy_card_uids(previous_owner)
+
+        tags = _effective_spool_tag_values(target)
+        if not any(rfid_uids_equal(tag, uid) for tag in tags):
+            tags.append(storage_uid)
+        if len(tags) > 2:
+            tags = tags[:2]
+        _set_native_spool_tag_values(target, tags)
+        _clear_legacy_card_uids(target)
+        existing = schemas.Tag(uid=uid, format=tag_format, added=datetime.now(timezone.utc))
+        await self.db.commit()
+
+        updated = await self._get_spool(target_id)
+        result = self._spool_to_schema(updated)
+        await self._emit_event("spool", target_id, schemas.EventType.updated, result)
+
+        if owner is not None and owner[:2] != (target_type, target_id):
+            kind, owner_id, _ = owner
+            if kind == "spool":
+                previous_owner = await self._get_spool(owner_id)
+                if previous_owner is not None:
+                    previous_result = self._spool_to_schema(previous_owner)
+                    await self._emit_event("spool", owner_id, schemas.EventType.updated, previous_result)
+        return existing
+
+    async def unlink_tag(self, target_type: str, target_id: int, uid: str) -> bool:
+        uid = normalize_tag_uid(uid)
+        if target_type != "spool":
+            return False
+
+        target = await self._get_spool(target_id)
+        if target is None:
+            return False
+
+        tags = _effective_spool_tag_values(target)
+        remaining = [tag for tag in tags if not rfid_uids_equal(tag, uid)]
+        if len(remaining) == len(tags):
+            return False
+
+        _set_native_spool_tag_values(target, remaining)
+        _clear_legacy_card_uids(target)
+        await self.db.commit()
+
+        updated = await self._get_spool(target_id)
+        result = self._spool_to_schema(updated)
+        await self._emit_event("spool", target_id, schemas.EventType.updated, result)
+        return True
+
+    async def scan_tag(self, data: schemas.TagScanParameters, client_host: str | None) -> schemas.TagScan:
+        uid = normalize_tag_uid(data.uid)
+        tag_format = data.format.strip().lower() if data.format and data.format.strip() else None
+        if tag_format is not None and len(tag_format) > 32:
+            raise ValueError("A tag format can be at most 32 characters.")
+
+        reader_id = data.reader_id
+        if reader_id is None:
+            host = re.sub(r"[^A-Za-z0-9._:-]", "-", client_host or "unknown")
+            reader_id = f"ip-{host}"[:64]
+
+        owner = await self._find_tag_owner(uid)
+        spool_id = owner[1] if owner and owner[0] == "spool" else None
+        filament_id = owner[1] if owner and owner[0] == "filament" else None
+        spool = await self._get_spool(spool_id) if spool_id is not None else None
+        filament = await self._get_filament(filament_id) if filament_id is not None else None
+        now = datetime.now(timezone.utc)
+
+        reader = await self.db.scalar(
+            select(FilaManTagReader).where(FilaManTagReader.reader_id == reader_id)
+        )
+        if reader is None:
+            reader = FilaManTagReader(reader_id=reader_id)
+            self.db.add(reader)
+            previous_uid = None
+            previous_spool_id = None
+            previous_seq = 0
+        else:
+            previous_uid = reader.last_uid
+            previous_spool_id = reader.last_spool_id
+            previous_seq = reader.last_seq
+
+        sequence = int(now.timestamp() * 1000)
+        should_broadcast = not (
+            rfid_uids_equal(previous_uid, uid)
+            and previous_spool_id == spool_id
+            and 0 <= sequence - previous_seq < 3000
+        )
+        if data.name:
+            reader.name = data.name
+        reader.last_seq = sequence
+        reader.last_uid = uid
+        reader.last_spool_id = spool.id if spool is not None else None
+        reader.last_spool_label = (
+            spool.filament.designation
+            if spool is not None and spool.filament is not None
+            else None
+        )
+        reader.last_seen_at = now
+        name = reader.name
+        spool_schema = self._spool_to_schema(spool) if spool is not None else None
+        filament_schema = self._filament_to_schema(filament) if filament is not None else None
+        await self.db.commit()
+
+        result = schemas.TagScan(
+            uid=uid,
+            reader_id=reader_id,
+            name=name,
+            format=tag_format,
+            payload_b64=data.payload_b64,
+            matched_spool_id=spool_id,
+            spool=spool_schema,
+            matched_filament_id=filament_id,
+            filament=filament_schema,
+        )
+
+        if should_broadcast:
+            event = schemas.Event(
+                type=schemas.EventType.scanned,
+                resource="tag_scan",
+                date=now,
+                payload=result.model_dump(mode="json"),
+            )
+            await websocket_manager.send(("tag_scan", reader_id), event)
+        return result
+
+    async def list_tag_readers(self) -> list[schemas.TagReader]:
+        result = await self.db.execute(
+            select(FilaManTagReader).order_by(FilaManTagReader.last_seq.desc())
+        )
+        return [
+            schemas.TagReader(
+                reader_id=reader.reader_id,
+                name=reader.name,
+                last_seen=reader.last_seen_at,
+            )
+            for reader in result.scalars().all()
+        ]
 
     async def list_materials(self) -> list[str]:
         result = await self.db.execute(select(Filament.material_type).distinct().order_by(Filament.material_type))
@@ -825,6 +1164,7 @@ class SpoolmanService:
         settings_extruder_temp = custom_fields.pop("settings_extruder_temp", None)
         settings_bed_temp = custom_fields.pop("settings_bed_temp", None)
         external_id = custom_fields.pop("external_id", None)
+        tags: list[schemas.Tag] = []
 
         return schemas.Filament(
             id=filament.id,
@@ -846,6 +1186,7 @@ class SpoolmanService:
             multi_color_direction=filament.multi_color_style,
             external_id=external_id,
             extra={k: json.dumps(v) for k, v in custom_fields.items()},
+            tags=tags,
         )
 
     async def _find_or_create_color(self, hex_code: str) -> Color:
@@ -934,6 +1275,11 @@ class SpoolmanService:
 
         custom_fields = dict(spool.custom_fields or {})
         comment = custom_fields.pop("comment", None)
+        tag_uids = _effective_spool_tag_values(spool)
+        custom_fields.pop("card_uids", None)
+        if tag_uids:
+            custom_fields["card_uids"] = ", ".join(tag_uids)
+        tags = [schemas.Tag(uid=uid, format=None, added=datetime.now(timezone.utc)) for uid in tag_uids]
 
         return schemas.Spool(
             id=spool.id,
@@ -953,6 +1299,7 @@ class SpoolmanService:
             comment=comment,
             archived=spool.status.key == "archived" if spool.status else False,
             extra={k: json.dumps(v) for k, v in custom_fields.items()},
+            tags=tags,
         )
 
     async def _resolve_location(self, name: str | None) -> int | None:
