@@ -79,9 +79,10 @@ def _legacy_spool_tag_values(spool: Spool) -> list[str]:
 
 def _effective_spool_tag_values(spool: Spool) -> list[str]:
     values = _native_spool_tag_values(spool)
-    if values:
-        return values
-    return _legacy_spool_tag_values(spool)
+    for uid in _legacy_spool_tag_values(spool):
+        if not any(rfid_uids_equal(uid, existing) for existing in values):
+            values.append(uid)
+    return values[:2]
 
 
 def _clear_legacy_card_uids(spool: Spool) -> None:
@@ -541,6 +542,9 @@ class SpoolmanService:
 
         result = await self.db.execute(query)
         spools = result.scalars().unique().all()
+        if await self._migrate_legacy_spool_tags(spools):
+            result = await self.db.execute(query)
+            spools = result.scalars().unique().all()
         items = [self._spool_to_schema(spool) for spool in spools]
         if normalized_tag is not None:
             items = [
@@ -556,6 +560,10 @@ class SpoolmanService:
         spool = await self._get_spool(spool_id)
         if not spool:
             return None
+        if await self._migrate_legacy_spool_tags([spool]):
+            spool = await self._get_spool(spool_id)
+            if spool is None:
+                return None
         return self._spool_to_schema(spool)
 
     async def create_spool(self, data: schemas.SpoolParameters) -> schemas.Spool:
@@ -1337,6 +1345,51 @@ class SpoolmanService:
             spool.remaining_weight_g = initial_weight - used_weight
         elif initial_weight is not None and remaining_weight is None:
             spool.remaining_weight_g = initial_weight
+
+    async def _migrate_legacy_spool_tags(self, spools: list[Spool]) -> bool:
+        migrated = False
+        for spool in spools:
+            legacy_tags = _legacy_spool_tag_values(spool)
+            if not legacy_tags:
+                continue
+
+            remaining_legacy_tags: list[str] = []
+            native_tags = _native_spool_tag_values(spool)
+            spool_migrated = False
+            for uid in legacy_tags:
+                if any(rfid_uids_equal(uid, existing) for existing in native_tags):
+                    continue
+
+                empty_slot = next(
+                    (
+                        field_name
+                        for field_name in ("rfid_uid", "rfid_uid_2")
+                        if rfid_storage_value(getattr(spool, field_name, None)) is None
+                    ),
+                    None,
+                )
+                if empty_slot is None:
+                    remaining_legacy_tags.append(uid)
+                    continue
+
+                setattr(spool, empty_slot, rfid_storage_value(uid))
+                native_tags.append(uid)
+                spool_migrated = True
+
+            if remaining_legacy_tags:
+                if spool_migrated:
+                    custom_fields = dict(spool.custom_fields or {})
+                    custom_fields["card_uids"] = ", ".join(remaining_legacy_tags)
+                    spool.custom_fields = custom_fields
+            elif "card_uids" in (spool.custom_fields or {}):
+                _clear_legacy_card_uids(spool)
+                spool_migrated = True
+
+            migrated = migrated or spool_migrated
+
+        if migrated:
+            await self.db.commit()
+        return migrated
 
     def _apply_text_filter(self, query: Any, column: Any, search_term: str | None) -> Any:
         if search_term is None:
