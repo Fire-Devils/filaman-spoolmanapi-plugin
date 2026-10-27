@@ -217,7 +217,10 @@ class SpoolmanService:
             query = query.outerjoin(FilamentColor, FilamentColor.filament_id == Filament.id).outerjoin(
                 Color, FilamentColor.color_id == Color.id
             )
-            query = query.where(func.upper(func.replace(Color.hex_code, "#", "")) == normalized)
+            stored_hex = func.upper(func.replace(Color.hex_code, "#", ""))
+            if len(normalized) == 6:
+                stored_hex = func.substr(stored_hex, 1, 6)
+            query = query.where(stored_hex == normalized)
 
         query = self._apply_sort(
             query,
