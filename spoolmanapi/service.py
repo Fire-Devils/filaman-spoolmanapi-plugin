@@ -4,6 +4,7 @@ import logging
 import json
 import math
 from datetime import datetime, timezone
+from string import hexdigits
 from typing import Any
 
 from sqlalchemy import select, func, or_
@@ -216,7 +217,10 @@ class SpoolmanService:
             query = query.outerjoin(FilamentColor, FilamentColor.filament_id == Filament.id).outerjoin(
                 Color, FilamentColor.color_id == Color.id
             )
-            query = query.where(func.upper(func.replace(Color.hex_code, "#", "")) == normalized)
+            stored_hex = func.upper(func.replace(Color.hex_code, "#", ""))
+            if len(normalized) == 6:
+                stored_hex = func.substr(stored_hex, 1, 6)
+            query = query.where(stored_hex == normalized)
 
         query = self._apply_sort(
             query,
@@ -800,6 +804,14 @@ class SpoolmanService:
             extra={k: json.dumps(v) for k, v in extra.items()},
         )
 
+    @staticmethod
+    def _to_rgb_hex(hex_code: str) -> str:
+        """Expose RGB to clients that cannot use FilaMan's trailing alpha byte."""
+        raw = hex_code.lstrip("#")
+        if len(raw) == 8 and all(char in hexdigits for char in raw):
+            return raw[:6]
+        return raw
+
     def _filament_to_schema(self, filament: Filament) -> schemas.Filament:
         vendor = self._manufacturer_to_vendor(filament.manufacturer) if filament.manufacturer else None
         colors = sorted(filament.filament_colors or [], key=lambda item: item.position)
@@ -807,13 +819,13 @@ class SpoolmanService:
         if colors:
             primary = next((item for item in colors if item.position == 1), colors[0])
             if primary.color and primary.color.hex_code:
-                primary_color = primary.color.hex_code.lstrip("#")
+                primary_color = self._to_rgb_hex(primary.color.hex_code)
 
         if filament.color_mode == "multi":
-            multi_colors = [item.color.hex_code.lstrip("#") for item in colors if item.color and item.color.hex_code]
+            multi_colors = [self._to_rgb_hex(item.color.hex_code) for item in colors if item.color and item.color.hex_code]
         else:
             multi_colors = [
-                item.color.hex_code.lstrip("#")
+                self._to_rgb_hex(item.color.hex_code)
                 for item in colors
                 if item.position > 1 and item.color and item.color.hex_code
             ]
