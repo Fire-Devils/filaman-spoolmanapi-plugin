@@ -10,8 +10,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from enum import Enum
+import ipaddress
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -348,3 +349,14 @@ class ExternalMaterial(BaseModel):
 class SpoolmanAPISettings(BaseModel):
     ip_filter_enabled: bool = False
     allowed_ips: list[str] = Field(default_factory=list)
+
+
+class SpoolmanAPISettingsUpdate(SpoolmanAPISettings):
+    @model_validator(mode="after")
+    def validate_allowed_ips(self) -> SpoolmanAPISettingsUpdate:
+        if not self.ip_filter_enabled:
+            return self
+        for pattern in self.allowed_ips:
+            if pattern != "*":
+                ipaddress.ip_network(pattern, strict=False)
+        return self
