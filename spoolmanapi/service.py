@@ -4,6 +4,7 @@ import logging
 import json
 import math
 from datetime import datetime, timezone
+from string import hexdigits
 from typing import Any
 
 from sqlalchemy import select, func, or_
@@ -797,16 +798,9 @@ class SpoolmanService:
 
     @staticmethod
     def _to_rgb_hex(hex_code: str) -> str:
-        """Convert a stored hex code to a 6-char RGB string for the Spoolman API.
-
-        FilaMan may store alpha-aware 9-char values (``#RRGGBBAA``) once alpha
-        color support is introduced.  The Spoolman HTTP API and Moonraker's AFC
-        integration only understand 6-char ``RRGGBB`` strings (no leading ``#``),
-        so strip the alpha channel when present.
-        """
+        """Expose RGB to clients that cannot use FilaMan's trailing alpha byte."""
         raw = hex_code.lstrip("#")
-        if len(raw) == 8:
-            # RRGGBBAA → RRGGBB
+        if len(raw) == 8 and all(char in hexdigits for char in raw):
             return raw[:6]
         return raw
 
