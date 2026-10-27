@@ -517,7 +517,7 @@ async def get_settings(
 
 @admin_router.put("/settings", response_model=schemas.SpoolmanAPISettings)
 async def update_settings(
-    data: schemas.SpoolmanAPISettings,
+    data: schemas.SpoolmanAPISettingsUpdate,
     db: DBSession,
     principal=RequirePermission("admin:plugins_manage"),
 ):
