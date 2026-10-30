@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de" data-theme="brand">
+<html lang="en" data-theme="brand">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -10,6 +10,8 @@
     (function() {
       var t = localStorage.getItem('theme') || 'brand';
       document.documentElement.setAttribute('data-theme', t);
+      var lang = (localStorage.getItem('lang') || navigator.language || 'en').toLowerCase().split('-')[0];
+      document.documentElement.lang = ['de', 'fr'].indexOf(lang) !== -1 ? lang : 'en';
     })();
   </script>
   <style>
@@ -422,40 +424,40 @@
   <div class="page-content">
 
     <div style="margin-bottom: 24px;">
-      <a href="/admin/system">&larr; Zurück zu System</a>
+      <a href="/admin/system">&larr; <span data-i18n="back">Back to System</span></a>
     </div>
 
     <h1 style="font-size: 1.8rem; font-weight: 700; margin: 0 0 8px; font-family: var(--font-serif);">Spoolman API</h1>
-    <p style="color: var(--text-muted); margin-bottom: 24px;">Stellt eine Spoolman-kompatible REST-API bereit, damit externe Tools (Moonraker, OctoPrint etc.) auf FilaMan zugreifen können.</p>
+    <p style="color: var(--text-muted); margin-bottom: 24px;" data-i18n="lead">Provides a Spoolman-compatible REST API so external tools (Moonraker, OctoPrint, etc.) can access FilaMan.</p>
 
     <!-- Status Card -->
     <div class="fm-card">
-      <h2 class="fm-card-header">API-Status</h2>
+      <h2 class="fm-card-header" data-i18n="status.title">API status</h2>
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
         <span id="status-badge" class="status-badge status-badge-active">
           <span class="status-dot"></span>
-          Aktiv
+          <span data-i18n="status.active">Active</span>
         </span>
       </div>
-      <p class="info-text">Externe Clients können folgende Basis-URL verwenden:</p>
+      <p class="info-text" data-i18n="status.baseUrl">External clients can use the following base URL:</p>
       <div class="api-url-row">
         <div id="api-url" class="api-url"></div>
-        <button type="button" id="btn-copy-url" class="fm-btn-copy" title="URL kopieren">⧉ Kopieren</button>
+        <button type="button" id="btn-copy-url" class="fm-btn-copy" title="Copy URL" data-i18n-title="copy.title">⧉ <span data-i18n="copy.button">Copy</span></button>
       </div>
       <p class="info-text" style="margin-top: 8px;">
-        Endpunkte: <code>/api/v1/vendor</code>, <code>/api/v1/filament</code>, <code>/api/v1/spool</code>, <code>/api/v1/info</code>, <code>/api/v1/health</code>
+        <span data-i18n="status.endpoints">Endpoints:</span> <code>/api/v1/vendor</code>, <code>/api/v1/filament</code>, <code>/api/v1/spool</code>, <code>/api/v1/info</code>, <code>/api/v1/health</code>
       </p>
     </div>
 
     <!-- IP Filter Settings Card -->
     <div class="fm-card">
-      <h2 class="fm-card-header">IP-Zugriffskontrolle</h2>
-      <p class="info-text" style="margin-bottom: 16px;">Beschränke den Zugriff auf die Spoolman API auf bestimmte IP-Adressen. Wenn deaktiviert, kann jede IP-Adresse zugreifen.</p>
+      <h2 class="fm-card-header" data-i18n="ip.title">IP access control</h2>
+      <p class="info-text" style="margin-bottom: 16px;" data-i18n="ip.lead">Restrict access to the Spoolman API to specific IP addresses. When disabled, any IP address can access it.</p>
 
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">IP-Filter aktivieren</div>
-          <div class="toggle-desc">Nur Anfragen von erlaubten IP-Adressen zulassen</div>
+          <div class="toggle-label" data-i18n="ip.enable">Enable IP filter</div>
+          <div class="toggle-desc" data-i18n="ip.enableDesc">Only allow requests from permitted IP addresses</div>
         </div>
         <label class="toggle-switch">
           <input type="checkbox" id="toggle-ip-filter" />
@@ -464,21 +466,21 @@
       </div>
 
       <div id="ip-section" class="ip-section hidden">
-        <label class="fm-label">Erlaubte IP-Adressen / Bereiche</label>
-        <p class="info-text" style="margin-bottom: 8px;">Einzelne IPs, CIDR-Bereiche (z.B. <code>192.168.1.0/24</code>) oder <code>*</code> für alle.</p>
+        <label class="fm-label" data-i18n="ip.allowed">Allowed IP addresses / ranges</label>
+        <p class="info-text" style="margin-bottom: 8px;" data-i18n-html="ip.allowedHint">Single IPs, CIDR ranges (e.g. <code>192.168.1.0/24</code>) or <code>*</code> for all.</p>
 
         <div id="ip-list" class="ip-list">
-          <div class="empty-state" id="ip-empty">Keine IP-Adressen konfiguriert</div>
+          <div class="empty-state" id="ip-empty" data-i18n="ip.empty">No IP addresses configured</div>
         </div>
 
         <div class="add-ip-row">
-          <input type="text" id="input-ip" class="fm-input" placeholder="z.B. 192.168.1.0/24 oder 10.0.0.5" />
-          <button type="button" id="btn-add-ip" class="fm-btn fm-btn-outline fm-btn-sm">Hinzufügen</button>
+          <input type="text" id="input-ip" class="fm-input" placeholder="e.g. 192.168.1.0/24 or 10.0.0.5" data-i18n-placeholder="ip.placeholder" />
+          <button type="button" id="btn-add-ip" class="fm-btn fm-btn-outline fm-btn-sm" data-i18n="ip.add">Add</button>
         </div>
       </div>
 
       <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
-        <button type="button" id="btn-save" class="fm-btn fm-btn-primary">Einstellungen speichern</button>
+        <button type="button" id="btn-save" class="fm-btn fm-btn-primary" data-i18n="save.button">Save settings</button>
       </div>
     </div>
 
@@ -487,6 +489,104 @@
   <div class="toast-container" id="toast-container"></div>
 
   <script>
+    // ── i18n ─────────────────────────────────────────────────
+    var translations = {
+      en: {
+        'back': 'Back to System',
+        'lead': 'Provides a Spoolman-compatible REST API so external tools (Moonraker, OctoPrint, etc.) can access FilaMan.',
+        'status.title': 'API status',
+        'status.active': 'Active',
+        'status.baseUrl': 'External clients can use the following base URL:',
+        'status.endpoints': 'Endpoints:',
+        'copy.title': 'Copy URL',
+        'copy.button': 'Copy',
+        'copy.done': 'URL copied',
+        'copy.failed': 'Copy failed',
+        'ip.title': 'IP access control',
+        'ip.lead': 'Restrict access to the Spoolman API to specific IP addresses. When disabled, any IP address can access it.',
+        'ip.enable': 'Enable IP filter',
+        'ip.enableDesc': 'Only allow requests from permitted IP addresses',
+        'ip.allowed': 'Allowed IP addresses / ranges',
+        'ip.allowedHint': 'Single IPs, CIDR ranges (e.g. <code>192.168.1.0/24</code>) or <code>*</code> for all.',
+        'ip.empty': 'No IP addresses configured',
+        'ip.placeholder': 'e.g. 192.168.1.0/24 or 10.0.0.5',
+        'ip.add': 'Add',
+        'ip.remove': 'Remove',
+        'ip.duplicate': 'IP address already added',
+        'save.button': 'Save settings',
+        'save.saving': 'Saving...',
+        'save.done': 'Settings saved',
+        'save.error': 'Error: ',
+        'load.error': 'Could not load settings: ',
+      },
+      de: {
+        'back': 'Zurück zu System',
+        'lead': 'Stellt eine Spoolman-kompatible REST-API bereit, damit externe Tools (Moonraker, OctoPrint etc.) auf FilaMan zugreifen können.',
+        'status.title': 'API-Status',
+        'status.active': 'Aktiv',
+        'status.baseUrl': 'Externe Clients können folgende Basis-URL verwenden:',
+        'status.endpoints': 'Endpunkte:',
+        'copy.title': 'URL kopieren',
+        'copy.button': 'Kopieren',
+        'copy.done': 'URL kopiert',
+        'copy.failed': 'Kopieren fehlgeschlagen',
+        'ip.title': 'IP-Zugriffskontrolle',
+        'ip.lead': 'Beschränke den Zugriff auf die Spoolman API auf bestimmte IP-Adressen. Wenn deaktiviert, kann jede IP-Adresse zugreifen.',
+        'ip.enable': 'IP-Filter aktivieren',
+        'ip.enableDesc': 'Nur Anfragen von erlaubten IP-Adressen zulassen',
+        'ip.allowed': 'Erlaubte IP-Adressen / Bereiche',
+        'ip.allowedHint': 'Einzelne IPs, CIDR-Bereiche (z.B. <code>192.168.1.0/24</code>) oder <code>*</code> für alle.',
+        'ip.empty': 'Keine IP-Adressen konfiguriert',
+        'ip.placeholder': 'z.B. 192.168.1.0/24 oder 10.0.0.5',
+        'ip.add': 'Hinzufügen',
+        'ip.remove': 'Entfernen',
+        'ip.duplicate': 'IP-Adresse bereits vorhanden',
+        'save.button': 'Einstellungen speichern',
+        'save.saving': 'Speichern...',
+        'save.done': 'Einstellungen gespeichert',
+        'save.error': 'Fehler: ',
+        'load.error': 'Einstellungen konnten nicht geladen werden: ',
+      },
+      fr: {
+        'back': 'Retour au système',
+        'lead': 'Fournit une API REST compatible Spoolman pour que des outils externes (Moonraker, OctoPrint, etc.) puissent accéder à FilaMan.',
+        'status.title': 'État de l\'API',
+        'status.active': 'Active',
+        'status.baseUrl': 'Les clients externes peuvent utiliser l\'URL de base suivante :',
+        'status.endpoints': 'Points de terminaison :',
+        'copy.title': 'Copier l\'URL',
+        'copy.button': 'Copier',
+        'copy.done': 'URL copiée',
+        'copy.failed': 'Échec de la copie',
+        'ip.title': 'Contrôle d\'accès IP',
+        'ip.lead': 'Limitez l\'accès à l\'API Spoolman à certaines adresses IP. Désactivé, toute adresse IP peut y accéder.',
+        'ip.enable': 'Activer le filtre IP',
+        'ip.enableDesc': 'N\'autoriser que les requêtes provenant d\'adresses IP autorisées',
+        'ip.allowed': 'Adresses / plages IP autorisées',
+        'ip.allowedHint': 'IP individuelles, plages CIDR (p. ex. <code>192.168.1.0/24</code>) ou <code>*</code> pour toutes.',
+        'ip.empty': 'Aucune adresse IP configurée',
+        'ip.placeholder': 'p. ex. 192.168.1.0/24 ou 10.0.0.5',
+        'ip.add': 'Ajouter',
+        'ip.remove': 'Supprimer',
+        'ip.duplicate': 'Adresse IP déjà présente',
+        'save.button': 'Enregistrer les paramètres',
+        'save.saving': 'Enregistrement...',
+        'save.done': 'Paramètres enregistrés',
+        'save.error': 'Erreur : ',
+        'load.error': 'Impossible de charger les paramètres : ',
+      },
+    }
+    var language = translations[document.documentElement.lang] ? document.documentElement.lang : 'en'
+
+    function t(key) {
+      return translations[language][key] || translations.en[key] || key
+    }
+
+    document.querySelectorAll('[data-i18n]').forEach(function(el) { el.textContent = t(el.dataset.i18n) })
+    document.querySelectorAll('[data-i18n-html]').forEach(function(el) { el.innerHTML = t(el.dataset.i18nHtml) })
+    document.querySelectorAll('[data-i18n-title]').forEach(function(el) { el.title = t(el.dataset.i18nTitle) })
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) { el.placeholder = t(el.dataset.i18nPlaceholder) })
+
     // ── Helpers ──────────────────────────────────────────────
     function getCsrfToken() {
       var match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]*)/)
@@ -561,9 +661,9 @@
     document.getElementById('btn-copy-url').addEventListener('click', function() {
       var url = apiUrlEl.textContent
       navigator.clipboard.writeText(url).then(function() {
-        showToast('URL kopiert', 'success')
+        showToast(t('copy.done'), 'success')
       }).catch(function() {
-        showToast('Kopieren fehlgeschlagen', 'error')
+        showToast(t('copy.failed'), 'error')
       })
     })
 
@@ -592,7 +692,7 @@
         var tag = document.createElement('span')
         tag.className = 'ip-tag'
         tag.innerHTML = escapeHtml(ip) +
-          '<button type="button" class="ip-tag-remove" data-index="' + index + '" title="Entfernen">&times;</button>'
+          '<button type="button" class="ip-tag-remove" data-index="' + index + '" title="' + escapeHtml(t('ip.remove')) + '">&times;</button>'
         ipList.appendChild(tag)
       })
     }
@@ -603,7 +703,7 @@
       if (!value) return
 
       if (allowedIps.indexOf(value) !== -1) {
-        showToast('IP-Adresse bereits vorhanden', 'error')
+        showToast(t('ip.duplicate'), 'error')
         return
       }
 
@@ -632,7 +732,7 @@
     // ── Save settings ───────────────────────────────────────
     btnSave.addEventListener('click', async function() {
       btnSave.disabled = true
-      btnSave.textContent = 'Speichern...'
+      btnSave.textContent = t('save.saving')
 
       try {
         var payload = {
@@ -640,12 +740,12 @@
           allowed_ips: allowedIps,
         }
         await apiPut('/api/v1/admin/system/spoolman-api/settings', payload)
-        showToast('Einstellungen gespeichert', 'success')
+        showToast(t('save.done'), 'success')
       } catch (err) {
-        showToast('Fehler: ' + err.message, 'error')
+        showToast(t('save.error') + err.message, 'error')
       } finally {
         btnSave.disabled = false
-        btnSave.textContent = 'Einstellungen speichern'
+        btnSave.textContent = t('save.button')
       }
     })
 
@@ -664,7 +764,7 @@
 
         renderIpList()
       } catch (err) {
-        showToast('Einstellungen konnten nicht geladen werden: ' + err.message, 'error')
+        showToast(t('load.error') + err.message, 'error')
       }
     }
 
