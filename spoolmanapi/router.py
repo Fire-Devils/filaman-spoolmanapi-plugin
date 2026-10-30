@@ -114,7 +114,7 @@ async def delete_vendor(vendor_id: int, db: DBSession):
     return schemas.Message(message="Success")
 
 
-@router.get("/filament", response_model=list[schemas.Filament])
+@router.get("/filament", response_model=list[schemas.Filament], response_model_exclude_none=True)
 async def list_filaments(
     response: Response,
     db: DBSession,
@@ -147,7 +147,7 @@ async def list_filaments(
     return filaments
 
 
-@router.get("/filament/{filament_id}", response_model=schemas.Filament)
+@router.get("/filament/{filament_id}", response_model=schemas.Filament, response_model_exclude_none=True)
 async def get_filament(filament_id: int, db: DBSession):
     svc = SpoolmanService(db)
     filament = await svc.get_filament(filament_id)
@@ -162,6 +162,7 @@ async def get_filament(filament_id: int, db: DBSession):
 @router.post(
     "/filament",
     response_model=schemas.Filament,
+    response_model_exclude_none=True,
     status_code=status.HTTP_200_OK,
 )
 async def create_filament(data: schemas.FilamentParameters, db: DBSession):
@@ -169,7 +170,7 @@ async def create_filament(data: schemas.FilamentParameters, db: DBSession):
     return await svc.create_filament(data)
 
 
-@router.patch("/filament/{filament_id}", response_model=schemas.Filament)
+@router.patch("/filament/{filament_id}", response_model=schemas.Filament, response_model_exclude_none=True)
 async def update_filament(
     filament_id: int,
     data: schemas.FilamentUpdateParameters,
@@ -196,7 +197,7 @@ async def delete_filament(filament_id: int, db: DBSession):
     return schemas.Message(message="Success")
 
 
-@router.get("/spool", response_model=list[schemas.Spool])
+@router.get("/spool", response_model=list[schemas.Spool], response_model_exclude_none=True)
 async def list_spools(
     response: Response,
     db: DBSession,
@@ -230,7 +231,7 @@ async def list_spools(
     return spools
 
 
-@router.get("/spool/{spool_id}", response_model=schemas.Spool)
+@router.get("/spool/{spool_id}", response_model=schemas.Spool, response_model_exclude_none=True)
 async def get_spool(spool_id: int, db: DBSession):
     svc = SpoolmanService(db)
     spool = await svc.get_spool(spool_id)
@@ -242,13 +243,13 @@ async def get_spool(spool_id: int, db: DBSession):
     return spool
 
 
-@router.post("/spool", response_model=schemas.Spool, status_code=status.HTTP_200_OK)
+@router.post("/spool", response_model=schemas.Spool, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
 async def create_spool(data: schemas.SpoolParameters, db: DBSession):
     svc = SpoolmanService(db)
     return await svc.create_spool(data)
 
 
-@router.patch("/spool/{spool_id}", response_model=schemas.Spool)
+@router.patch("/spool/{spool_id}", response_model=schemas.Spool, response_model_exclude_none=True)
 async def update_spool(
     spool_id: int,
     data: schemas.SpoolUpdateParameters,
@@ -275,7 +276,7 @@ async def delete_spool(spool_id: int, db: DBSession):
     return schemas.Message(message="Success")
 
 
-@router.put("/spool/{spool_id}/use", response_model=schemas.Spool)
+@router.put("/spool/{spool_id}/use", response_model=schemas.Spool, response_model_exclude_none=True)
 async def use_spool(
     spool_id: int,
     data: schemas.SpoolUseParameters,
@@ -302,7 +303,7 @@ async def use_spool(
     return spool
 
 
-@router.put("/spool/{spool_id}/measure", response_model=schemas.Spool)
+@router.put("/spool/{spool_id}/measure", response_model=schemas.Spool, response_model_exclude_none=True)
 async def measure_spool(
     spool_id: int,
     data: schemas.SpoolMeasureParameters,
