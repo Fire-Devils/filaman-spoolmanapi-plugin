@@ -46,6 +46,17 @@ class VendorUpdateParameters(BaseModel):
     extra: dict[str, str] | None = None
 
 
+class Tag(BaseModel):
+    uid: str
+    format: str | None = None
+    added: datetime
+
+
+class TagLinkParameters(BaseModel):
+    uid: str = Field(min_length=1, max_length=128)
+    format: str | None = Field(None, max_length=32)
+
+
 # ---------------------------------------------------------------------------
 # Filament
 # ---------------------------------------------------------------------------
@@ -70,6 +81,7 @@ class Filament(BaseModel):
     multi_color_direction: str | None = None
     external_id: str | None = None
     extra: dict[str, str] = Field(default_factory=dict)
+    tags: list[Tag] = Field(default_factory=list)
 
 
 class FilamentParameters(BaseModel):
@@ -136,6 +148,7 @@ class Spool(BaseModel):
     comment: str | None = None
     archived: bool = False
     extra: dict[str, str] = Field(default_factory=dict)
+    tags: list[Tag] = Field(default_factory=list)
 
 
 class SpoolParameters(BaseModel):
@@ -219,6 +232,7 @@ class EventType(str, Enum):
     added = "added"
     updated = "updated"
     deleted = "deleted"
+    scanned = "scanned"
 
 
 class Event(BaseModel):
@@ -227,6 +241,32 @@ class Event(BaseModel):
     resource: str
     date: datetime
     payload: dict
+
+
+class TagScanParameters(BaseModel):
+    uid: str = Field(min_length=1, max_length=128)
+    reader_id: str | None = Field(None, pattern=r"^[A-Za-z0-9._:-]{1,64}$")
+    name: str | None = Field(None, max_length=64)
+    format: str | None = Field(None, max_length=32)
+    payload_b64: str | None = Field(None, max_length=8192)
+
+
+class TagScan(BaseModel):
+    uid: str
+    reader_id: str
+    name: str | None = None
+    format: str | None = None
+    payload_b64: str | None = None
+    matched_spool_id: int | None
+    spool: Spool | None = None
+    matched_filament_id: int | None
+    filament: Filament | None = None
+
+
+class TagReader(BaseModel):
+    reader_id: str
+    name: str | None = None
+    last_seen: datetime | None = None
 
 # ---------------------------------------------------------------------------
 # Location

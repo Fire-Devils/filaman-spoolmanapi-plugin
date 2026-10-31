@@ -11,12 +11,13 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api.deps import DBSession, RequirePermission
 
@@ -126,23 +127,28 @@ async def list_filaments(
     color_hex: str | None = Query(None),
     color_similarity_threshold: float = Query(20),
     external_id: str | None = Query(None),
+    tag: str | None = Query(None),
     sort: str | None = Query(None),
     limit: int | None = Query(None),
     offset: int = Query(0),
 ):
     svc = SpoolmanService(db)
-    filaments, total = await svc.list_filaments(
-        vendor_name=vendor_name,
-        vendor_id=vendor_id,
-        name=name,
-        material=material,
-        article_number=article_number,
-        color_hex=color_hex,
-        external_id=external_id,
-        sort=sort,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        filaments, total = await svc.list_filaments(
+            vendor_name=vendor_name,
+            vendor_id=vendor_id,
+            name=name,
+            material=material,
+            article_number=article_number,
+            color_hex=color_hex,
+            external_id=external_id,
+            tag=tag,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
     response.headers["x-total-count"] = str(total)
     return filaments
 
@@ -208,25 +214,30 @@ async def list_spools(
     vendor_id: str | None = Query(None, alias="filament.vendor.id"),
     location: str | None = Query(None),
     lot_nr: str | None = Query(None),
+    tag: str | None = Query(None),
     allow_archived: bool = Query(False),
     sort: str | None = Query(None),
     limit: int | None = Query(None),
     offset: int = Query(0),
 ):
     svc = SpoolmanService(db)
-    spools, total = await svc.list_spools(
-        filament_name=filament_name,
-        filament_id=filament_id,
-        filament_material=filament_material,
-        vendor_name=vendor_name,
-        vendor_id=vendor_id,
-        location=location,
-        lot_nr=lot_nr,
-        allow_archived=allow_archived,
-        sort=sort,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        spools, total = await svc.list_spools(
+            filament_name=filament_name,
+            filament_id=filament_id,
+            filament_material=filament_material,
+            vendor_name=vendor_name,
+            vendor_id=vendor_id,
+            location=location,
+            lot_nr=lot_nr,
+            tag=tag,
+            allow_archived=allow_archived,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
     response.headers["x-total-count"] = str(total)
     return spools
 
@@ -246,7 +257,10 @@ async def get_spool(spool_id: int, db: DBSession):
 @router.post("/spool", response_model=schemas.Spool, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
 async def create_spool(data: schemas.SpoolParameters, db: DBSession):
     svc = SpoolmanService(db)
-    return await svc.create_spool(data)
+    try:
+        return await svc.create_spool(data)
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
 
 
 @router.patch("/spool/{spool_id}", response_model=schemas.Spool, response_model_exclude_none=True)
@@ -256,7 +270,10 @@ async def update_spool(
     db: DBSession,
 ):
     svc = SpoolmanService(db)
-    spool = await svc.update_spool(spool_id, data)
+    try:
+        spool = await svc.update_spool(spool_id, data)
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
     if spool is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -274,6 +291,37 @@ async def delete_spool(spool_id: int, db: DBSession):
             detail={"message": "Spool not found"},
         )
     return schemas.Message(message="Success")
+
+
+@router.post("/spool/{spool_id}/tag", response_model=schemas.Tag, status_code=status.HTTP_201_CREATED)
+async def link_spool_tag(spool_id: int, data: schemas.TagLinkParameters, db: DBSession):
+    svc = SpoolmanService(db)
+    try:
+        tag = await svc.link_tag("spool", spool_id, data.uid, data.format)
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
+    if tag is None:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"message": "Spool not found"})
+    return tag
+
+
+@router.delete(
+    "/spool/{spool_id}/tag/{uid}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def unlink_spool_tag(spool_id: int, uid: str, db: DBSession):
+    svc = SpoolmanService(db)
+    try:
+        unlinked = await svc.unlink_tag("spool", spool_id, uid)
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
+    if not unlinked:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"message": "Spool or tag not found"},
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put("/spool/{spool_id}/use", response_model=schemas.Spool, response_model_exclude_none=True)
@@ -323,6 +371,24 @@ async def measure_spool(
             detail={"message": "Spool not found"},
         )
     return spool
+
+
+@router.post("/tag/scan", response_model=schemas.TagScan, response_model_exclude_none=True)
+async def scan_tag(data: schemas.TagScanParameters, request: Request, db: DBSession):
+    svc = SpoolmanService(db)
+    try:
+        result = await svc.scan_tag(data, request.client.host if request.client else None)
+    except ValueError as exc:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(exc)})
+    content = result.model_dump(mode="json", exclude_none=True)
+    content.setdefault("matched_spool_id", None)
+    content.setdefault("matched_filament_id", None)
+    return JSONResponse(content=content)
+
+
+@router.get("/tag/reader", response_model=list[schemas.TagReader], response_model_exclude_none=True)
+async def list_tag_readers(db: DBSession):
+    return await SpoolmanService(db).list_tag_readers()
 
 
 @router.get("/material", response_model=list[str])
@@ -581,6 +647,16 @@ async def ws_vendor(websocket: WebSocket) -> None:
 @router.websocket("/vendor/{vendor_id}")
 async def ws_vendor_id(websocket: WebSocket, vendor_id: int) -> None:
     await _handle_ws(websocket, ("vendor", str(vendor_id)))
+
+
+@router.websocket("/tag/scan")
+async def ws_tag_scans(websocket: WebSocket) -> None:
+    await _handle_ws(websocket, ("tag_scan",))
+
+
+@router.websocket("/tag/scan/{reader_id}")
+async def ws_tag_reader_scans(websocket: WebSocket, reader_id: str) -> None:
+    await _handle_ws(websocket, ("tag_scan", reader_id))
 
 
 # ---------------------------------------------------------------------------
