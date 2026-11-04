@@ -5,6 +5,7 @@ import json
 import math
 import re
 from datetime import datetime, timezone
+from string import hexdigits
 from typing import Any
 
 from sqlalchemy import select, func, or_
@@ -290,10 +291,20 @@ class SpoolmanService:
             query = self._apply_text_filter(query, external_field, external_id)
         if color_hex:
             normalized = color_hex.strip().lstrip("#").upper()
-            query = query.outerjoin(FilamentColor, FilamentColor.filament_id == Filament.id).outerjoin(
-                Color, FilamentColor.color_id == Color.id
+            stored_hex = func.upper(func.replace(Color.hex_code, "#", ""))
+            matches = stored_hex == normalized
+            if len(normalized) == 6 and all(char in hexdigits for char in normalized):
+                rgba = func.upper(func.ltrim(Color.hex_code, "#"))
+                hex_chars = tuple("0123456789ABCDEF")
+                matches = or_(matches, (
+                    (func.length(rgba) == 8)
+                    & (func.substr(rgba, 1, 6) == normalized)
+                    & func.substr(rgba, 7, 1).in_(hex_chars)
+                    & func.substr(rgba, 8, 1).in_(hex_chars)
+                ))
+            query = query.where(
+                Filament.filament_colors.any(FilamentColor.color.has(matches))
             )
-            query = query.where(func.upper(func.replace(Color.hex_code, "#", "")) == normalized)
 
         query = self._apply_sort(
             query,
@@ -372,7 +383,7 @@ class SpoolmanService:
         filament.filament_colors = []
         self.db.add(filament)
         await self.db.flush()
-        await self._apply_filament_colors(filament, data.color_hex, data.multi_color_hexes)
+        await self._apply_filament_colors(filament, data)
         await self.db.commit()
         filament = await self._get_filament(filament.id)
         result = self._filament_to_schema(filament)
@@ -436,13 +447,7 @@ class SpoolmanService:
         filament.custom_fields = custom_fields or None
 
         if "multi_color_hexes" in payload or "color_hex" in payload:
-            filament.color_mode = "multi" if payload.get("multi_color_hexes") else "single"
-            await self._apply_filament_colors(
-                filament,
-                payload.get("color_hex"),
-                payload.get("multi_color_hexes"),
-                clear_existing=True,
-            )
+            await self._apply_filament_colors(filament, data)
         elif "multi_color_direction" in payload:
             filament.color_mode = filament.color_mode or "single"
 
@@ -1147,23 +1152,27 @@ class SpoolmanService:
             extra={k: json.dumps(v) for k, v in extra.items()},
         )
 
+    @staticmethod
+    def _to_rgb_hex(hex_code: str) -> str:
+        """Expose RGB to clients that cannot use FilaMan's trailing alpha byte."""
+        raw = hex_code.lstrip("#")
+        if len(raw) == 8 and all(char in hexdigits for char in raw):
+            return raw[:6]
+        return raw
+
+    @staticmethod
+    def _filament_color_links(filament: Filament) -> tuple[FilamentColor | None, list[FilamentColor]]:
+        colors = sorted(filament.filament_colors or [], key=lambda item: item.position)
+        primary = next((item for item in colors if item.position == 1), colors[0] if colors else None)
+        multi = [item for item in colors if item.color and item.color.hex_code
+                 and (filament.color_mode == "multi" or item.position > 1)]
+        return primary, multi
+
     def _filament_to_schema(self, filament: Filament) -> schemas.Filament:
         vendor = self._manufacturer_to_vendor(filament.manufacturer) if filament.manufacturer else None
-        colors = sorted(filament.filament_colors or [], key=lambda item: item.position)
-        primary_color = None
-        if colors:
-            primary = next((item for item in colors if item.position == 1), colors[0])
-            if primary.color and primary.color.hex_code:
-                primary_color = primary.color.hex_code.lstrip("#")
-
-        if filament.color_mode == "multi":
-            multi_colors = [item.color.hex_code.lstrip("#") for item in colors if item.color and item.color.hex_code]
-        else:
-            multi_colors = [
-                item.color.hex_code.lstrip("#")
-                for item in colors
-                if item.position > 1 and item.color and item.color.hex_code
-            ]
+        primary, multi = self._filament_color_links(filament)
+        primary_color = self._to_rgb_hex(primary.color.hex_code) if primary and primary.color and primary.color.hex_code else None
+        multi_colors = [self._to_rgb_hex(item.color.hex_code) for item in multi]
         multi_color_hexes = ",".join(multi_colors) if multi_colors else None
 
         custom_fields = dict(filament.custom_fields or {})
@@ -1202,7 +1211,7 @@ class SpoolmanService:
         if not normalized.startswith("#"):
             normalized = f"#{normalized}"
 
-        result = await self.db.execute(select(Color).where(Color.hex_code == normalized))
+        result = await self.db.execute(select(Color).where(Color.hex_code == normalized).order_by(Color.id).limit(1))
         color = result.scalar_one_or_none()
         if color:
             return color
@@ -1212,28 +1221,89 @@ class SpoolmanService:
         await self.db.flush()
         return color
 
+    def _color_matches(self, item: FilamentColor | None, value: str) -> bool:
+        if not item or not item.color or not item.color.hex_code:
+            return False
+        raw = value.strip().lstrip("#").upper()
+        stored = item.color.hex_code.strip().lstrip("#").upper()
+        return raw == stored or (len(raw) == 6 and raw == self._to_rgb_hex(stored))
+
     async def _apply_filament_colors(
-        self,
-        filament: Filament,
-        color_hex: str | None,
-        multi_color_hexes: str | None,
-        clear_existing: bool = False,
+        self, filament: Filament, data: schemas.FilamentParameters | schemas.FilamentUpdateParameters,
     ) -> None:
-        if clear_existing:
-            filament.filament_colors.clear()
+        original = list(filament.filament_colors)
+        primary, multi = self._filament_color_links(filament)
+        values = [value.strip() for value in (data.multi_color_hexes or "").split(",") if value.strip()]
+        if values:
+            slots = list(multi)
+            replaced = set(multi)
+            mode = "multi"
+            if (filament.color_mode == "single" and multi and "color_hex" in data.model_fields_set
+                    and (data.color_hex or not primary or not primary.color or not primary.color.hex_code)):
+                mode = "single"
+                if data.color_hex:
+                    replaced.add(primary)
+                    if primary in slots:
+                        index = slots.index(primary)
+                        # A fallback primary may also be exposed as a secondary.
+                        if index < len(values) and self._color_matches(primary, values[index]):
+                            values[index] = data.color_hex
+                    else:
+                        slots.insert(0, primary)
+                        values.insert(0, data.color_hex)
+        else:
+            values = [data.color_hex] if data.color_hex else []
+            slots = [primary]
+            replaced = {primary, *multi} if "multi_color_hexes" in data.model_fields_set else {primary}
+            mode = "single" if "multi_color_hexes" in data.model_fields_set else filament.color_mode
 
-        if multi_color_hexes:
-            hex_list = [item.strip() for item in multi_color_hexes.split(",") if item.strip()]
-            for index, hex_code in enumerate(hex_list, start=1):
-                color = await self._find_or_create_color(hex_code)
-                filament.filament_colors.append(FilamentColor(color_id=color.id, position=index))
-            filament.color_mode = "multi"
+        if not values:
+            if {"color_hex", "multi_color_hexes"} <= data.model_fields_set:
+                filament.filament_colors.clear()
+                filament.color_mode = mode
+            else:
+                removed = set(multi) if "multi_color_hexes" in data.model_fields_set else {primary}
+                filament.filament_colors[:] = [item for item in original if item not in removed]
             return
+        if mode != filament.color_mode:
+            replaced = set(original)
 
-        if color_hex:
-            color = await self._find_or_create_color(color_hex)
-            filament.filament_colors.append(FilamentColor(color_id=color.id, position=1))
-        filament.color_mode = "single"
+        plan = [(slots[index] if index < len(slots) else None, value) for index, value in enumerate(values)]
+        # Keep unchanged slots reserved before matching reordered copies of the same RGB.
+        aligned = {item for item, value in plan if self._color_matches(item, value)}
+        reserved = set(aligned)
+        sources = {item: item.color.hex_code.strip().lstrip("#").upper()
+                   for item in [primary, *multi] if item and item.color and item.color.hex_code}
+        resolved = []
+        for item, value in plan:
+            if self._color_matches(item, value):
+                resolved.append((item, item.color, item.display_name_override))
+                continue
+            candidates = [candidate for candidate in sources if candidate not in reserved
+                          and self._color_matches(candidate, value)]
+            hexes = {sources[candidate] for candidate in candidates}
+            if len(hexes) == 1:
+                source = min(candidates, key=lambda candidate: candidate.color_id)
+                reserved.add(source)
+                # Indistinguishable moved copies cannot identify conflicting labels.
+                labels = {candidate.display_name_override for candidate in sources
+                          if candidate not in aligned and sources[candidate] == sources[source]}
+                resolved.append((item, source.color, labels.pop() if len(labels) == 1 else None))
+            else:
+                resolved.append((item, await self._find_or_create_color(value), None))
+
+        # Resolve every color before changing links: lookups can autoflush the session.
+        colors = [item for item in original if item not in replaced]
+        position = max([0, *(item.position for item in original)])
+        for item, color, label in resolved:
+            if item is None:
+                position += 1
+                item = FilamentColor(position=position)
+            item.color = color
+            item.display_name_override = label
+            colors.append(item)
+        filament.filament_colors[:] = colors
+        filament.color_mode = mode
 
     async def _get_filament(self, filament_id: int) -> Filament | None:
         result = await self.db.execute(
