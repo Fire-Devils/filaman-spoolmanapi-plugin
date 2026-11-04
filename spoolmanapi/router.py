@@ -18,12 +18,13 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.websockets import WebSocketState
 
 from app.api.deps import DBSession, RequirePermission
 
 from . import schemas
 from .service import SpoolmanService
-from .ip_filter import check_ws_ip_access, require_ip_access
+from .ip_filter import enforce_ws_ip_access, require_ip_access
 from .settings import load_settings, save_settings
 from .ws import websocket_manager
 
@@ -583,7 +584,7 @@ async def get_settings(
 
 @admin_router.put("/settings", response_model=schemas.SpoolmanAPISettings)
 async def update_settings(
-    data: schemas.SpoolmanAPISettings,
+    data: schemas.SpoolmanAPISettingsUpdate,
     db: DBSession,
     principal=RequirePermission("admin:plugins_manage"),
 ):
@@ -601,16 +602,22 @@ async def _handle_ws(websocket: WebSocket, pool: tuple[str, ...]) -> None:
 
     Responds to any incoming text with a health status (ping/pong).
     """
-    if not await check_ws_ip_access(websocket):
-        await websocket.close(code=1008, reason="IP not allowed")
+    if not await enforce_ws_ip_access(websocket):
         return
     await websocket.accept()
     websocket_manager.connect(pool, websocket)
     try:
         while True:
             await websocket.receive_text()
+            if not await enforce_ws_ip_access(websocket):
+                return
             await websocket.send_json({"status": "healthy"})
     except WebSocketDisconnect:
+        pass
+    except RuntimeError:
+        if websocket.application_state != WebSocketState.DISCONNECTED:
+            raise
+    finally:
         websocket_manager.disconnect(pool, websocket)
 
 

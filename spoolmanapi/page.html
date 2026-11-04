@@ -89,6 +89,7 @@
 
     /* Cards */
     .fm-card {
+      min-width: 0;
       background: var(--bg-elevated);
       border-radius: var(--radius-md);
       border: 1px solid var(--border);
@@ -450,23 +451,23 @@
     </div>
 
     <!-- IP Filter Settings Card -->
-    <div class="fm-card">
+    <fieldset class="fm-card" id="settings-controls" disabled>
       <h2 class="fm-card-header" data-i18n="ip.title">IP access control</h2>
       <p class="info-text" style="margin-bottom: 16px;" data-i18n="ip.lead">Restrict access to the Spoolman API to specific IP addresses. When disabled, any IP address can access it.</p>
 
       <div class="toggle-row">
         <div>
-          <div class="toggle-label" data-i18n="ip.enable">Enable IP filter</div>
+          <div class="toggle-label" id="filter-label" data-i18n="ip.enable">Enable IP filter</div>
           <div class="toggle-desc" data-i18n="ip.enableDesc">Only allow requests from permitted IP addresses</div>
         </div>
         <label class="toggle-switch">
-          <input type="checkbox" id="toggle-ip-filter" />
+          <input type="checkbox" id="toggle-ip-filter" aria-labelledby="filter-label" />
           <span class="toggle-slider"></span>
         </label>
       </div>
 
       <div id="ip-section" class="ip-section hidden">
-        <label class="fm-label" data-i18n="ip.allowed">Allowed IP addresses / ranges</label>
+        <label class="fm-label" for="input-ip" data-i18n="ip.allowed">Allowed IP addresses / ranges</label>
         <p class="info-text" style="margin-bottom: 8px;" data-i18n-html="ip.allowedHint">Single IPs, CIDR ranges (e.g. <code>192.168.1.0/24</code>) or <code>*</code> for all.</p>
 
         <div id="ip-list" class="ip-list">
@@ -480,13 +481,13 @@
       </div>
 
       <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
-        <button type="button" id="btn-save" class="fm-btn fm-btn-primary" data-i18n="save.button">Save settings</button>
+        <button type="button" id="btn-save" class="fm-btn fm-btn-primary" data-i18n="save.button" disabled>Save settings</button>
       </div>
-    </div>
+    </fieldset>
 
   </div>
 
-  <div class="toast-container" id="toast-container"></div>
+  <div class="toast-container" id="toast-container" role="status" aria-live="polite"></div>
 
   <script>
     // ── i18n ─────────────────────────────────────────────────
@@ -513,6 +514,7 @@
         'ip.add': 'Add',
         'ip.remove': 'Remove',
         'ip.duplicate': 'IP address already added',
+        'ip.invalid': 'Enter a valid IP address or CIDR range',
         'save.button': 'Save settings',
         'save.saving': 'Saving...',
         'save.done': 'Settings saved',
@@ -541,6 +543,7 @@
         'ip.add': 'Hinzufügen',
         'ip.remove': 'Entfernen',
         'ip.duplicate': 'IP-Adresse bereits vorhanden',
+        'ip.invalid': 'Gültige IP-Adresse oder CIDR-Bereich eingeben',
         'save.button': 'Einstellungen speichern',
         'save.saving': 'Speichern...',
         'save.done': 'Einstellungen gespeichert',
@@ -569,6 +572,7 @@
         'ip.add': 'Ajouter',
         'ip.remove': 'Supprimer',
         'ip.duplicate': 'Adresse IP déjà présente',
+        'ip.invalid': 'Saisissez une adresse IP ou une plage CIDR valide',
         'save.button': 'Enregistrer les paramètres',
         'save.saving': 'Enregistrement...',
         'save.done': 'Paramètres enregistrés',
@@ -628,6 +632,7 @@
       })
       if (!resp.ok) {
         var data = await resp.json().catch(function() { return {} })
+        if (resp.status === 422) throw new Error(t('ip.invalid'))
         throw new Error(data.detail?.message || data.detail || 'HTTP ' + resp.status)
       }
       return resp.json()
@@ -652,6 +657,7 @@
     var inputIp = document.getElementById('input-ip')
     var btnAddIp = document.getElementById('btn-add-ip')
     var btnSave = document.getElementById('btn-save')
+    var settingsControls = document.getElementById('settings-controls')
     var apiUrlEl = document.getElementById('api-url')
 
     // ── Set API URL ─────────────────────────────────────────
@@ -731,6 +737,7 @@
 
     // ── Save settings ───────────────────────────────────────
     btnSave.addEventListener('click', async function() {
+      settingsControls.disabled = true
       btnSave.disabled = true
       btnSave.textContent = t('save.saving')
 
@@ -744,6 +751,7 @@
       } catch (err) {
         showToast(t('save.error') + err.message, 'error')
       } finally {
+        settingsControls.disabled = false
         btnSave.disabled = false
         btnSave.textContent = t('save.button')
       }
@@ -763,6 +771,8 @@
         }
 
         renderIpList()
+        settingsControls.disabled = false
+        btnSave.disabled = false
       } catch (err) {
         showToast(t('load.error') + err.message, 'error')
       }

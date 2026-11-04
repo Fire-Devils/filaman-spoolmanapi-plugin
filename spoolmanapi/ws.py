@@ -20,6 +20,8 @@ from collections import defaultdict
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
+from .ip_filter import enforce_ws_ip_access
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,19 +57,18 @@ class SubscriptionTree:
 
         dead: list[tuple[tuple[str, ...], WebSocket]] = []
         for ws in targets:
-            if ws.client_state == WebSocketState.DISCONNECTED:
-                # Find which pool(s) this dead socket belongs to and mark.
-                for p, bucket in self._pools.items():
-                    if ws in bucket:
-                        dead.append((p, ws))
-                continue
             try:
-                await ws.send_text(data)
+                if (ws.client_state != WebSocketState.DISCONNECTED
+                        and ws.application_state != WebSocketState.DISCONNECTED):
+                    if await enforce_ws_ip_access(ws):
+                        await ws.send_text(data)
+                        continue
             except Exception:
                 logger.debug("Failed to send WS message, removing connection")
-                for p, bucket in self._pools.items():
-                    if ws in bucket:
-                        dead.append((p, ws))
+            # Remove closed or denied sockets even when closing failed.
+            for p, bucket in self._pools.items():
+                if ws in bucket:
+                    dead.append((p, ws))
 
         # Clean up dead connections.
         for p, ws in dead:

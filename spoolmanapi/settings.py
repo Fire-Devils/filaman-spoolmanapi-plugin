@@ -45,7 +45,6 @@ _settings_table = Table(
 # Internal state
 # ---------------------------------------------------------------------------
 
-_cached: SpoolmanAPISettings | None = None
 _table_ensured: bool = False
 
 
@@ -72,10 +71,7 @@ async def _ensure_table() -> None:
 
 
 async def load_settings() -> SpoolmanAPISettings:
-    """Return current settings (cached after first load)."""
-    global _cached
-    if _cached is not None:
-        return _cached
+    """Read current settings so every worker sees changes immediately."""
 
     await _ensure_table()
 
@@ -86,19 +82,15 @@ async def load_settings() -> SpoolmanAPISettings:
         row = result.first()
 
     if row is not None:
-        _cached = SpoolmanAPISettings(
+        return SpoolmanAPISettings(
             ip_filter_enabled=row.ip_filter_enabled,
             allowed_ips=row.allowed_ips or [],
         )
-    else:
-        _cached = SpoolmanAPISettings()
-
-    return _cached
+    return SpoolmanAPISettings()
 
 
 async def save_settings(settings: SpoolmanAPISettings) -> None:
-    """Persist *settings* to the database and update the module cache."""
-    global _cached
+    """Persist *settings* to the database."""
 
     await _ensure_table()
 
@@ -128,5 +120,4 @@ async def save_settings(settings: SpoolmanAPISettings) -> None:
 
         await session.commit()
 
-    _cached = settings
     _logger.info("SpoolmanAPI-Settings in Datenbank gespeichert")

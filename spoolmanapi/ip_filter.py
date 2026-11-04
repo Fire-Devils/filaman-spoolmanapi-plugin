@@ -13,6 +13,7 @@ import logging
 
 from fastapi import HTTPException, WebSocket, status
 from starlette.requests import HTTPConnection
+from starlette.websockets import WebSocketState
 
 from .settings import load_settings
 
@@ -59,11 +60,11 @@ async def require_ip_access(conn: HTTPConnection) -> None:
 
     Raises 403 when the client IP is not permitted.
     WebSocket connections are skipped here — they are filtered
-    separately by :func:`check_ws_ip_access` in the WS handler.
+    separately by :func:`enforce_ws_ip_access` in the WS handler.
     """
     # Router dependencies are evaluated for WebSocket routes too, but
     # HTTPException cannot be sent over a WS handshake.  The WS handler
-    # calls check_ws_ip_access() instead.
+    # calls enforce_ws_ip_access() instead.
     if conn.scope.get("type") == "websocket":
         return
     settings = await load_settings()
@@ -100,3 +101,21 @@ async def check_ws_ip_access(websocket: WebSocket) -> bool:
     if client_ip is None:
         return False
     return _ip_matches(client_ip, settings.allowed_ips)
+
+
+async def enforce_ws_ip_access(websocket: WebSocket) -> bool:
+    """Close denied sockets, including when the access settings cannot be read."""
+    try:
+        if await check_ws_ip_access(websocket):
+            return True
+        code, reason = 1008, "IP not allowed"
+    except Exception:
+        _logger.exception("Failed to read WS access settings")
+        code, reason = 1011, "Access settings unavailable"
+    try:
+        if (websocket.client_state != WebSocketState.DISCONNECTED
+                and websocket.application_state != WebSocketState.DISCONNECTED):
+            await websocket.close(code=code, reason=reason)
+    except Exception:
+        _logger.debug("Failed to close WS connection", exc_info=True)
+    return False
