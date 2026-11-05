@@ -127,6 +127,8 @@ class SpoolmanService:
         payload: object,
     ) -> None:
         """Broadcast a WebSocket event to all subscribers."""
+        # Access checks use another session; release post-mutation reads before sending.
+        await self.db.commit()
         try:
             event = schemas.Event(
                 type=event_type,
