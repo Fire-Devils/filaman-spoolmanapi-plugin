@@ -736,6 +736,8 @@ class SpoolmanService:
                 _clear_legacy_card_uids(previous_owner)
                 displaced_owner_ids.append(previous_owner.id)
 
+        # Release unique RFID values before assigning them to another spool.
+        await self.db.flush()
         _set_native_spool_tag_values(target, values)
         _clear_legacy_card_uids(target)
         return displaced_owner_ids
@@ -857,6 +859,8 @@ class SpoolmanService:
                     ]
                     _set_native_spool_tag_values(previous_owner, previous_tags)
                     _clear_legacy_card_uids(previous_owner)
+                    # Release unique RFID values before assigning them to another spool.
+                    await self.db.flush()
 
         tags = _effective_spool_tag_values(target)
         if not any(rfid_uids_equal(tag, uid) for tag in tags):
