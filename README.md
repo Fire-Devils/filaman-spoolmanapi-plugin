@@ -34,6 +34,37 @@ spool tag API without retaining it as a custom field. Native spool RFID tags tak
 
 ## API
 
+### Color compatibility
+
+FilaMan stores colors as `#RRGGBB` or `#RRGGBBAA`. This plugin returns six-digit
+RGB values for AFC and other consumers that require opaque colors, including
+colors nested in spool and event payloads. Spoolman itself supports trailing
+alpha; this RGB projection is a consumer compatibility choice.
+
+An RGB filter matches stored colors with any alpha value. An eight-digit filter
+matches the exact RGBA value. Updates match the returned color slots rather than
+assuming native positions start at one or are contiguous. An unchanged RGB value
+preserves its native color, alpha, position and assignment label. Distinct colors
+can be reordered without losing alpha or labels. Duplicate RGB values keep their
+matching slots. Moved copies with the same RGBA retain that alpha and any common
+label; conflicting labels are not guessed. A moved RGB value with multiple
+possible alpha values is treated as a new opaque color. Send eight digits to
+select an exact alpha, including a trailing `FF` for opaque. When both requested color
+values are null or empty, assignments are cleared.
+
+For native single-mode filaments with secondary colors, sending both color fields
+updates the primary and secondary colors while retaining single mode. To switch
+to multi mode, send `multi_color_hexes` without a nonempty `color_hex`. A fallback
+primary can also appear in the secondary list; an edit replaces its unchanged
+echo without duplicating the native assignment. If both fields change that same
+assignment to different values, the secondary-list value takes precedence.
+Omitting the secondary field preserves it and the color mode during a primary edit; explicitly
+sending an empty or null secondary field removes those secondary assignments.
+Clearing only the primary field removes its assignment while retaining the other
+native assignments. Partial clears retain the native color mode. In multi mode,
+the secondary list includes every visible assignment, including the primary.
+Empty comma-separated tokens are ignored; a list with no colors acts as an empty list.
+
 All Spoolman endpoints are available under:
 
 ```
