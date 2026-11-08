@@ -1,8 +1,9 @@
 {
+  "icon": "icon.svg",
   "plugin_key": "spoolmanapi",
   "name": "Spoolman API",
   "plugin_type": "integration",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Exposes a Spoolman-compatible REST API that maps to FilaMan's internal data model. External tools (Moonraker, OctoPrint, etc.) can use FilaMan as a drop-in Spoolman replacement. Includes IP-based access control — a security layer missing in Spoolman.",
   "author": "FilaMan",
   "homepage": "https://github.com/Donkie/Spoolman",
