@@ -19,11 +19,39 @@ from app.models.tag_reader import TagReader as FilaManTagReader
 from app.models.location import Location
 from app.services.spool_service import SpoolService
 
+try:
+    import app.services.spoolman_projection as projection
+except ModuleNotFoundError as exc:
+    if exc.name != "app.services.spoolman_projection":
+        raise
+    projection = None
+
 from . import schemas
 from .settings import load_settings
 from .ws import websocket_manager
 
 logger = logging.getLogger(__name__)
+
+_TEMPERATURE_FIELDS = {
+    "settings_extruder_temp": "extruder_temp_range_c",
+    "settings_bed_temp": "bed_temp_range_c",
+}
+
+
+def _apply_filament_temperatures(filament: Filament, fields: dict, payload: dict, extra: dict) -> None:
+    for key, native_field in _TEMPERATURE_FIELDS.items():
+        if key in payload:
+            value = payload[key]
+        elif key in extra:
+            value = extra[key]
+        else:
+            continue
+        fields.pop(key, None)
+        if projection is None:
+            if value is not None:
+                fields[key] = value
+        elif value is None or value != projection.project_alias_value(filament, key, None, filament=True):
+            setattr(filament, native_field, None if value is None else {"min": value, "max": value})
 
 
 def normalize_tag_uid(uid: str) -> str:
@@ -97,6 +125,41 @@ def _decode_extra(extra: dict[str, str] | None) -> dict[str, Any]:
     return {key: json.loads(value) for key, value in (extra or {}).items()}
 
 
+def _decode_filament_extra(extra: dict[str, str] | None) -> dict[str, Any]:
+    values = _decode_extra(extra)
+    top_level = {
+        key: value for key, value in values.items()
+        if key in _TEMPERATURE_FIELDS or key in {"article_number", "comment", "external_id"}
+    }
+    if top_level:
+        # These legacy keys become typed response fields after the write commits.
+        values.update(schemas.FilamentParameters.model_validate(top_level).model_dump(exclude_unset=True))
+    return values
+
+
+def _without_projected_echoes(extra: dict, stored: dict, projected: dict, explicit) -> dict:
+    result = {}
+    for key, value in extra.items():
+        if key in explicit or key not in projected:
+            result[key] = value
+            continue
+        if projection._same_source_value(value, projected[key]):
+            continue
+        if key == "spoolman_extra" and isinstance(value, dict) and isinstance(projected[key], dict):
+            # The client may edit a sibling while echoing a derived value in the same object.
+            original = stored.get(key)
+            original = original if isinstance(original, dict) else {}
+            nested = {}
+            for name, item in value.items():
+                if name not in projected[key] or not projection._same_source_value(item, projected[key][name]):
+                    nested[name] = item
+                elif name in original:
+                    nested[name] = original[name]
+            value = nested
+        result[key] = value
+    return result
+
+
 def _weight_to_length_mm(weight_g: float, diameter_mm: float, density_g_cm3: float) -> float:
     """Convert net filament weight (g) to length (mm)."""
     radius_cm = (diameter_mm / 2) / 10
@@ -118,6 +181,29 @@ def _length_to_weight_g(length_mm: float, diameter_mm: float, density_g_cm3: flo
 class SpoolmanService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _prepare_projection(self) -> None:
+        if projection is not None and "spoolman_definitions" not in self.db.info:
+            await projection._load_system_definition_context(self.db)
+
+    def _projection_definitions(self, entity: str) -> dict:
+        return self.db.info.get("spoolman_definitions", {}).get(entity, {}) if self.db is not None else {}
+
+    def _filament_fields(self, filament: Filament) -> dict:
+        if projection is None:
+            return dict(filament.custom_fields or {})
+        return projection.FilamentCompatibilityView(
+            filament, self._projection_definitions("filament")
+        ).custom_fields
+
+    def _spool_fields(self, spool: Spool) -> dict:
+        fields = spool.custom_fields or {}
+        if projection is None or spool.filament is None:
+            return dict(fields)
+        return projection.project_extra(
+            spool, fields, filament=spool.filament,
+            system_definitions=self._projection_definitions("spool"),
+        )
 
     async def _emit_event(
         self,
@@ -260,6 +346,7 @@ class SpoolmanService:
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[schemas.Filament], int]:
+        await self._prepare_projection()
         normalized_tag = normalize_tag_uid(tag) if tag is not None else None
         query = (
             select(Filament)
@@ -350,17 +437,12 @@ class SpoolmanService:
         return self._filament_to_schema(filament)
 
     async def create_filament(self, data: schemas.FilamentParameters) -> schemas.Filament:
-        custom_fields: dict[str, Any] = {}
-        if data.extra:
-            custom_fields.update(_decode_extra(data.extra))
+        extra = _decode_filament_extra(data.extra)
+        custom_fields = dict(extra)
         if data.article_number is not None:
             custom_fields["article_number"] = data.article_number
         if data.comment is not None:
             custom_fields["comment"] = data.comment
-        if data.settings_extruder_temp is not None:
-            custom_fields["settings_extruder_temp"] = data.settings_extruder_temp
-        if data.settings_bed_temp is not None:
-            custom_fields["settings_bed_temp"] = data.settings_bed_temp
         if data.external_id is not None:
             custom_fields["external_id"] = data.external_id
 
@@ -376,8 +458,9 @@ class SpoolmanService:
             price=data.price,
             color_mode=color_mode,
             multi_color_style=data.multi_color_direction,
-            custom_fields=custom_fields or None,
         )
+        _apply_filament_temperatures(filament, custom_fields, data.model_dump(exclude_unset=True), extra)
+        filament.custom_fields = custom_fields or None
         # Initialize the collection on the fresh object so the append() in
         # _apply_filament_colors does not trigger an async lazy-load on a
         # persistent-but-unloaded relationship (raises MissingGreenlet under
@@ -398,6 +481,11 @@ class SpoolmanService:
             return None
 
         payload = data.model_dump(exclude_unset=True)
+        extra = _decode_filament_extra(payload.get("extra"))
+        if projection is not None and extra:
+            extra = _without_projected_echoes(
+                extra, filament.custom_fields or {}, self._filament_fields(filament), _TEMPERATURE_FIELDS
+            )
         if "name" in payload:
             filament.designation = payload["name"] or "Unnamed"
         if "vendor_id" in payload:
@@ -428,23 +516,13 @@ class SpoolmanService:
                 custom_fields.pop("comment", None)
             else:
                 custom_fields["comment"] = payload["comment"]
-        if "settings_extruder_temp" in payload:
-            if payload["settings_extruder_temp"] is None:
-                custom_fields.pop("settings_extruder_temp", None)
-            else:
-                custom_fields["settings_extruder_temp"] = payload["settings_extruder_temp"]
-        if "settings_bed_temp" in payload:
-            if payload["settings_bed_temp"] is None:
-                custom_fields.pop("settings_bed_temp", None)
-            else:
-                custom_fields["settings_bed_temp"] = payload["settings_bed_temp"]
         if "external_id" in payload:
             if payload["external_id"] is None:
                 custom_fields.pop("external_id", None)
             else:
                 custom_fields["external_id"] = payload["external_id"]
-        if "extra" in payload and payload["extra"]:
-            custom_fields.update(_decode_extra(payload["extra"]))
+        custom_fields.update(extra)
+        _apply_filament_temperatures(filament, custom_fields, payload, extra)
 
         filament.custom_fields = custom_fields or None
 
@@ -484,6 +562,7 @@ class SpoolmanService:
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[schemas.Spool], int]:
+        await self._prepare_projection()
         normalized_tag = normalize_tag_uid(tag) if tag is not None else None
         query = (
             select(Spool)
@@ -617,6 +696,11 @@ class SpoolmanService:
             return None
 
         payload = data.model_dump(exclude_unset=True)
+        extra = _decode_extra(payload.get("extra"))
+        if projection is not None and extra:
+            extra = _without_projected_echoes(
+                extra, spool.custom_fields or {}, self._spool_fields(spool), {"card_uids"}
+            )
         weight_keys = ("initial_weight", "spool_weight", "remaining_weight", "used_weight")
         weight_changes_requested = [key for key in weight_keys if key in payload]
         old_initial_total_weight_g = spool.initial_total_weight_g
@@ -645,13 +729,12 @@ class SpoolmanService:
         has_legacy_card_uids = "card_uids" in custom_fields
         card_uids_was_supplied = False
         legacy_card_uids = custom_fields.pop("card_uids", None)
-        if "extra" in payload and payload["extra"]:
-            decoded_extra = _decode_extra(payload["extra"])
-            if "card_uids" in decoded_extra:
-                legacy_card_uids = decoded_extra.pop("card_uids")
+        if extra:
+            if "card_uids" in extra:
+                legacy_card_uids = extra.pop("card_uids")
                 has_legacy_card_uids = True
                 card_uids_was_supplied = True
-            custom_fields.update(decoded_extra)
+            custom_fields.update(extra)
         if has_legacy_card_uids and (
             card_uids_was_supplied or not _native_spool_tag_values(spool)
         ):
@@ -1030,6 +1113,7 @@ class SpoolmanService:
         return location.name
 
     async def export_spools(self) -> list[dict]:
+        await self._prepare_projection()
         result = await self.db.execute(
             select(Spool)
             .options(
@@ -1062,12 +1146,13 @@ class SpoolmanService:
                     "location": spool.location.name if spool.location else None,
                     "lot_number": spool.lot_number,
                     "status": spool.status.key if spool.status else None,
-                    "custom_fields": spool.custom_fields,
+                    "custom_fields": self._spool_fields(spool) or spool.custom_fields,
                 }
             )
         return payload
 
     async def export_filaments(self) -> list[dict]:
+        await self._prepare_projection()
         result = await self.db.execute(
             select(Filament)
             .options(
@@ -1095,7 +1180,7 @@ class SpoolmanService:
                     "spool_weight": filament.default_spool_weight_g,
                     "color_mode": filament.color_mode,
                     "multi_color_style": filament.multi_color_style,
-                    "custom_fields": filament.custom_fields,
+                    "custom_fields": self._filament_fields(filament) or filament.custom_fields,
                 }
             )
         return payload
@@ -1181,7 +1266,7 @@ class SpoolmanService:
         multi_colors = [self._to_rgb_hex(item.color.hex_code) for item in multi]
         multi_color_hexes = ",".join(multi_colors) if multi_colors else None
 
-        custom_fields = dict(filament.custom_fields or {})
+        custom_fields = self._filament_fields(filament)
         article_number = custom_fields.pop("article_number", None)
         comment = custom_fields.pop("comment", None)
         settings_extruder_temp = custom_fields.pop("settings_extruder_temp", None)
@@ -1312,6 +1397,7 @@ class SpoolmanService:
         filament.color_mode = mode
 
     async def _get_filament(self, filament_id: int) -> Filament | None:
+        await self._prepare_projection()
         result = await self.db.execute(
             select(Filament)
             .where(Filament.id == filament_id)
@@ -1327,6 +1413,7 @@ class SpoolmanService:
         return result.scalar_one()
 
     async def _get_spool(self, spool_id: int) -> Spool | None:
+        await self._prepare_projection()
         result = await self.db.execute(
             select(Spool)
             .where(Spool.id == spool_id)
@@ -1357,7 +1444,7 @@ class SpoolmanService:
             if used_weight is not None:
                 used_length = _weight_to_length_mm(used_weight, filament.diameter, filament.density)
 
-        custom_fields = dict(spool.custom_fields or {})
+        custom_fields = self._spool_fields(spool)
         comment = custom_fields.pop("comment", None)
         tag_uids = _effective_spool_tag_values(spool)
         custom_fields.pop("card_uids", None)

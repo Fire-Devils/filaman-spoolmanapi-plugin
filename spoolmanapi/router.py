@@ -174,7 +174,10 @@ async def get_filament(filament_id: int, db: DBSession):
 )
 async def create_filament(data: schemas.FilamentParameters, db: DBSession):
     svc = SpoolmanService(db)
-    return await svc.create_filament(data)
+    try:
+        return await svc.create_filament(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.patch("/filament/{filament_id}", response_model=schemas.Filament, response_model_exclude_none=True)
@@ -184,7 +187,10 @@ async def update_filament(
     db: DBSession,
 ):
     svc = SpoolmanService(db)
-    filament = await svc.update_filament(filament_id, data)
+    try:
+        filament = await svc.update_filament(filament_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if filament is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
