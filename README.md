@@ -34,6 +34,14 @@ spool tag API without retaining it as a custom field. Native spool RFID tags tak
 
 ## API
 
+### Filament temperatures
+
+On FilaMan Core 2.x, the API projects native nozzle, bed, and drying settings
+into filament responses, nested spool responses, and downloads. Nozzle and bed
+ranges display their lower available endpoint. Sending that value back preserves
+the range. Changing the scalar sets both endpoints, and `null` clears the range.
+Older Core versions use legacy custom fields for temperature storage.
+
 ### Color compatibility
 
 FilaMan stores colors as `#RRGGBB` or `#RRGGBBAA`. This plugin returns six-digit
