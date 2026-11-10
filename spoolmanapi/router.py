@@ -6,6 +6,8 @@ plus admin endpoints for managing the plugin's IP-filter settings.
 
 from __future__ import annotations
 
+from math import isfinite
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -17,7 +19,10 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.routing import APIRoute
 from starlette.websockets import WebSocketState
 
 from app.api.deps import DBSession, RequirePermission
@@ -28,8 +33,26 @@ from .ip_filter import enforce_ws_ip_access, require_ip_access
 from .settings import load_settings, save_settings
 from .ws import websocket_manager
 
+
+class _SpoolmanRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def handle(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RequestValidationError as exc:
+                # Older Core cannot render validation errors containing a non-finite input.
+                errors = jsonable_encoder(
+                    exc.errors(), custom_encoder={float: lambda value: value if isfinite(value) else str(value)},
+                )
+                return JSONResponse(status_code=422, content={"detail": errors})
+
+        return handle
+
+
 # Main Spoolman-compatible router — IP-filtered, no auth required
-router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_ip_access)])
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_ip_access)], route_class=_SpoolmanRoute)
 
 
 # Admin router for plugin settings — auth-protected, no IP filter
@@ -86,7 +109,10 @@ async def get_vendor(vendor_id: int, db: DBSession):
 @router.post("/vendor", response_model=schemas.Vendor, status_code=status.HTTP_200_OK)
 async def create_vendor(data: schemas.VendorParameters, db: DBSession):
     svc = SpoolmanService(db)
-    return await svc.create_vendor(data)
+    try:
+        return await svc.create_vendor(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.patch("/vendor/{vendor_id}", response_model=schemas.Vendor)
@@ -96,7 +122,10 @@ async def update_vendor(
     db: DBSession,
 ):
     svc = SpoolmanService(db)
-    vendor = await svc.update_vendor(vendor_id, data)
+    try:
+        vendor = await svc.update_vendor(vendor_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if vendor is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -345,6 +374,11 @@ async def use_spool(
     svc = SpoolmanService(db)
     try:
         spool = await svc.use_spool(spool_id, data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": str(exc)},
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -367,6 +401,11 @@ async def measure_spool(
     svc = SpoolmanService(db)
     try:
         spool = await svc.measure_spool(spool_id, data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": str(exc)},
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -454,16 +493,12 @@ async def get_setting(key: str, db: DBSession):
     return result
 
 
-@router.post("/setting/{key}", response_model=schemas.SettingResponse)
-async def set_setting(key: str, db: DBSession, body: str = ""):
-    svc = SpoolmanService(db)
-    result = await svc.set_setting(key, body)
-    if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"message": "Setting not found"},
-        )
-    return result
+@router.post("/setting/{key}", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def set_setting(key: str, body: str = ""):
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail={"message": "The Spoolman API plugin exposes settings as read-only."},
+    )
 
 
 @router.get("/field/{entity_type}", response_model=list[schemas.ExtraField])
@@ -472,27 +507,24 @@ async def get_extra_fields(entity_type: schemas.EntityType, db: DBSession):
     return await svc.get_extra_fields(entity_type.value)
 
 
-@router.post("/field/{entity_type}/{key}", response_model=list[schemas.ExtraField])
+@router.post("/field/{entity_type}/{key}", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 async def add_extra_field(
     entity_type: schemas.EntityType,
     key: str,
     data: schemas.ExtraFieldParameters,
-    db: DBSession,
 ):
-    svc = SpoolmanService(db)
-    return await svc.add_extra_field(entity_type.value, key, data.model_dump())
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail={"message": "Manage extra field definitions in FilaMan."},
+    )
 
 
-@router.delete("/field/{entity_type}/{key}", response_model=list[schemas.ExtraField])
-async def delete_extra_field(entity_type: schemas.EntityType, key: str, db: DBSession):
-    svc = SpoolmanService(db)
-    result = await svc.delete_extra_field(entity_type.value, key)
-    if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"message": "Field not found"},
-        )
-    return result
+@router.delete("/field/{entity_type}/{key}", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def delete_extra_field(entity_type: schemas.EntityType, key: str):
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail={"message": "Manage extra field definitions in FilaMan."},
+    )
 
 
 @router.get("/export/spools")
@@ -573,11 +605,12 @@ async def get_external_materials(db: DBSession):
     return await svc.get_external_materials()
 
 
-@router.post("/backup", response_model=schemas.BackupResponse)
-async def backup(db: DBSession):
-    svc = SpoolmanService(db)
-    path = await svc.create_backup()
-    return schemas.BackupResponse(path=path)
+@router.post("/backup", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def backup():
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail={"message": "Use the authenticated backup tools in FilaMan."},
+    )
 
 
 @admin_router.get("/settings", response_model=schemas.SpoolmanAPISettings)
@@ -610,21 +643,18 @@ async def _handle_ws(websocket: WebSocket, pool: tuple[str, ...]) -> None:
     """
     if not await enforce_ws_ip_access(websocket):
         return
-    await websocket.accept()
-    websocket_manager.connect(pool, websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-            if not await enforce_ws_ip_access(websocket):
-                return
-            await websocket.send_json({"status": "healthy"})
-    except WebSocketDisconnect:
-        pass
-    except RuntimeError:
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            raise
-    finally:
-        websocket_manager.disconnect(pool, websocket)
+    async with websocket_manager.subscribe(pool, websocket):
+        try:
+            while True:
+                await websocket.receive_text()
+                if not await enforce_ws_ip_access(websocket):
+                    return
+                await websocket.send_json({"status": "healthy"})
+        except WebSocketDisconnect:
+            pass
+        except RuntimeError:
+            if websocket.application_state != WebSocketState.DISCONNECTED:
+                raise
 
 
 @router.websocket("/")

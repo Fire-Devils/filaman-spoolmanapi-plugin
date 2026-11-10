@@ -1,10 +1,10 @@
 # Spoolman API Plugin for FilaMan
 
-A FilaMan plugin that exposes a fully Spoolman-compatible REST API, allowing external tools like **Moonraker**, **OctoPrint** and others to use FilaMan as a drop-in replacement for Spoolman. Unlike Spoolman itself, this plugin includes IP-based access control — letting you restrict which devices are allowed to reach the API.
+A FilaMan plugin that exposes a Spoolman-compatible REST API for tools such as **Moonraker** and **OctoPrint**. Use the IP allowlist to control which devices can reach the API.
 
 ## Features
 
-- Full Spoolman API v1 compatibility (all endpoints)
+- Spoolman API v1 support for the operations listed below
 - Vendor, Filament and Spool CRUD operations
 - Query filtering, sorting and pagination
 - NFC/RFID tag linking for spools, lookup and scan relay for readers
@@ -32,6 +32,13 @@ By default, all IPs are allowed. To restrict access, open the plugin settings pa
 The plugin accepts `extra.card_uids` as a comma-separated string and translates it to/from the
 spool tag API without retaining it as a custom field. Native spool RFID tags take precedence.
 
+### WebSocket delivery
+
+On Unix, workers in the same FilaMan deployment relay live WebSocket events
+through private local sockets. Each receiving worker checks its subscribers
+against the current IP allowlist before sending. The relay uses a shared local
+`/tmp` directory, so delivery is limited to workers on the same host.
+
 ## API
 
 ### Filament temperatures
@@ -40,6 +47,8 @@ On FilaMan Core 2.x, the API projects native nozzle, bed, and drying settings
 into filament responses, nested spool responses, and downloads. Nozzle and bed
 ranges display their lower available endpoint. Sending that value back preserves
 the range. Changing the scalar sets both endpoints, and `null` clears the range.
+Edit projected extras such as drying settings in FilaMan. The plugin accepts
+unchanged echoes of these values and edits to independently stored custom fields.
 Older Core versions use legacy custom fields for temperature storage.
 
 ### Color compatibility
@@ -73,7 +82,7 @@ native assignments. Partial clears retain the native color mode. In multi mode,
 the secondary list includes every visible assignment, including the primary.
 Empty comma-separated tokens are ignored; a list with no colors acts as an empty list.
 
-All Spoolman endpoints are available under:
+The plugin serves these endpoints under:
 
 ```
 http://<filaman-host>:8000/spoolman/api/v1/
@@ -100,11 +109,15 @@ http://<filaman-host>:8000/spoolman/api/v1/
 | GET | `/material` | List materials |
 | GET | `/location` | List locations |
 | PATCH | `/location/{name}` | Rename location |
-| GET/POST | `/setting/{key}` | Get / set settings |
+| GET | `/setting/{key}` | Read a compatibility setting |
 | GET | `/export/spools` | Export spools (CSV/JSON) |
 | GET | `/export/filaments` | Export filaments (CSV/JSON) |
 | GET | `/export/vendors` | Export vendors (CSV/JSON) |
-| POST | `/backup` | Create backup |
+
+Setting writes, extra-field definition writes, and backup requests return HTTP
+501. Manage extra-field definitions and create backups through FilaMan.
+Length-based consumption requires a positive filament diameter and density.
+Send `use_weight` if the filament's dimensions are unavailable.
 
 ## License
 

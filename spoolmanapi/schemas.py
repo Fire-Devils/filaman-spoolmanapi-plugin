@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 import ipaddress
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ class VendorParameters(BaseModel):
     """POST /vendor body."""
     name: str
     comment: str | None = None
-    empty_spool_weight: float | None = None
+    empty_spool_weight: FiniteFloat | None = None
     external_id: str | None = None
     extra: dict[str, str] | None = None
 
@@ -42,7 +42,7 @@ class VendorUpdateParameters(BaseModel):
     """PATCH /vendor/{id} body.  All fields optional."""
     name: str | None = None
     comment: str | None = None
-    empty_spool_weight: float | None = None
+    empty_spool_weight: FiniteFloat | None = None
     external_id: str | None = None
     extra: dict[str, str] | None = None
 
@@ -90,11 +90,11 @@ class FilamentParameters(BaseModel):
     name: str | None = None
     vendor_id: int | None = None
     material: str | None = None
-    price: float | None = None
-    density: float | None = None
-    diameter: float | None = None
-    weight: float | None = None
-    spool_weight: float | None = None
+    price: FiniteFloat | None = None
+    density: FiniteFloat | None = None
+    diameter: FiniteFloat | None = None
+    weight: FiniteFloat | None = None
+    spool_weight: FiniteFloat | None = None
     article_number: str | None = None
     comment: str | None = None
     settings_extruder_temp: int | None = None
@@ -111,11 +111,11 @@ class FilamentUpdateParameters(BaseModel):
     name: str | None = None
     vendor_id: int | None = None
     material: str | None = None
-    price: float | None = None
-    density: float | None = None
-    diameter: float | None = None
-    weight: float | None = None
-    spool_weight: float | None = None
+    price: FiniteFloat | None = None
+    density: FiniteFloat | None = None
+    diameter: FiniteFloat | None = None
+    weight: FiniteFloat | None = None
+    spool_weight: FiniteFloat | None = None
     article_number: str | None = None
     comment: str | None = None
     settings_extruder_temp: int | None = None
@@ -141,9 +141,9 @@ class Spool(BaseModel):
     initial_weight: float | None = None
     spool_weight: float | None = None
     remaining_weight: float | None = None
-    used_weight: float = 0
+    used_weight: float | None = 0
     remaining_length: float | None = None
-    used_length: float = 0
+    used_length: float | None = 0
     location: str | None = None
     lot_nr: str | None = None
     comment: str | None = None
@@ -157,11 +157,11 @@ class SpoolParameters(BaseModel):
     filament_id: int
     first_used: datetime | None = None
     last_used: datetime | None = None
-    price: float | None = None
-    initial_weight: float | None = None
-    spool_weight: float | None = None
-    remaining_weight: float | None = None
-    used_weight: float | None = None
+    price: FiniteFloat | None = None
+    initial_weight: FiniteFloat | None = None
+    spool_weight: FiniteFloat | None = None
+    remaining_weight: FiniteFloat | None = None
+    used_weight: FiniteFloat | None = None
     location: str | None = None
     lot_nr: str | None = None
     comment: str | None = None
@@ -174,11 +174,11 @@ class SpoolUpdateParameters(BaseModel):
     filament_id: int | None = None
     first_used: datetime | None = None
     last_used: datetime | None = None
-    price: float | None = None
-    initial_weight: float | None = None
-    spool_weight: float | None = None
-    remaining_weight: float | None = None
-    used_weight: float | None = None
+    price: FiniteFloat | None = None
+    initial_weight: FiniteFloat | None = None
+    spool_weight: FiniteFloat | None = None
+    remaining_weight: FiniteFloat | None = None
+    used_weight: FiniteFloat | None = None
     location: str | None = None
     lot_nr: str | None = None
     comment: str | None = None
@@ -188,13 +188,13 @@ class SpoolUpdateParameters(BaseModel):
 
 class SpoolUseParameters(BaseModel):
     """PUT /spool/{id}/use body.  Provide *either* use_weight or use_length."""
-    use_weight: float | None = None
-    use_length: float | None = None
+    use_weight: FiniteFloat | None = None
+    use_length: FiniteFloat | None = None
 
 
 class SpoolMeasureParameters(BaseModel):
     """PUT /spool/{id}/measure body.  Gross weight (filament + spool)."""
-    weight: float
+    weight: FiniteFloat
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +220,6 @@ class HealthCheck(BaseModel):
 class Message(BaseModel):
     message: str
 
-
-class BackupResponse(BaseModel):
-    path: str
 
 # ---------------------------------------------------------------------------
 # WebSocket events
