@@ -4,11 +4,12 @@ import logging
 import json
 import math
 import re
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from string import hexdigits
 from typing import Any
 
-from sqlalchemy import select, func, or_
+from sqlalchemy import event, func, inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,6 +22,7 @@ from app.services.spool_service import SpoolService
 
 try:
     import app.services.spoolman_projection as projection
+    from app.services.extra_field_validation import normalize_numeric_range
 except ModuleNotFoundError as exc:
     if exc.name != "app.services.spoolman_projection":
         raise
@@ -50,8 +52,10 @@ def _apply_filament_temperatures(filament: Filament, fields: dict, payload: dict
         if projection is None:
             if value is not None:
                 fields[key] = value
-        elif value is None or value != projection.project_alias_value(filament, key, None, filament=True):
-            setattr(filament, native_field, None if value is None else {"min": value, "max": value})
+        else:
+            native_range = None if value is None else normalize_numeric_range(value)
+            if value is None or value != projection.project_alias_value(filament, key, None, filament=True):
+                setattr(filament, native_field, native_range)
 
 
 def normalize_tag_uid(uid: str) -> str:
@@ -121,8 +125,22 @@ def _clear_legacy_card_uids(spool: Spool) -> None:
         spool.custom_fields = custom_fields or None
 
 
-def _decode_extra(extra: dict[str, str] | None) -> dict[str, Any]:
-    return {key: json.loads(value) for key, value in (extra or {}).items()}
+def _parse_finite_extra_number(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Extra fields must contain finite numbers.")
+    return number
+
+
+def _decode_extra(extra: dict[str, str] | None, *, text_fields: tuple[str, ...] = ()) -> dict[str, Any]:
+    values = {
+        key: json.loads(value, parse_float=_parse_finite_extra_number, parse_constant=_parse_finite_extra_number)
+        for key, value in (extra or {}).items()
+    }
+    for key in text_fields:
+        if values.get(key) is not None and not isinstance(values[key], str):
+            raise ValueError(f"extra.{key} must be a string or null.")
+    return values
 
 
 def _decode_filament_extra(extra: dict[str, str] | None) -> dict[str, Any]:
@@ -137,7 +155,9 @@ def _decode_filament_extra(extra: dict[str, str] | None) -> dict[str, Any]:
     return values
 
 
-def _without_projected_echoes(extra: dict, stored: dict, projected: dict, explicit) -> dict:
+def _without_projected_echoes(
+    extra: dict, stored: dict, projected: dict, explicit, retained: set[tuple[str, ...]],
+) -> dict:
     result = {}
     for key, value in extra.items():
         if key in explicit or key not in projected:
@@ -149,24 +169,66 @@ def _without_projected_echoes(extra: dict, stored: dict, projected: dict, explic
             # The client may edit a sibling while echoing a derived value in the same object.
             original = stored.get(key)
             original = original if isinstance(original, dict) else {}
-            nested = {}
+            nested = {
+                name: item for name, item in original.items() if (key, name) in retained
+            }
             for name, item in value.items():
-                if name not in projected[key] or not projection._same_source_value(item, projected[key][name]):
+                derived = name in projected[key] and (
+                    (key, name) in retained or name not in original
+                    or not projection._same_source_value(original[name], projected[key][name])
+                )
+                if not derived:
                     nested[name] = item
-                elif name in original:
-                    nested[name] = original[name]
+                elif not projection._same_source_value(item, projected[key][name]):
+                    raise ValueError(f"extra.{key}.{name} is projected from FilaMan and is read-only")
             value = nested
+        elif (
+            key not in stored or not projection._same_source_value(stored[key], projected[key])
+            or any(source[0] == key for source in retained)
+        ):
+            raise ValueError(f"extra.{key} is projected from FilaMan and is read-only")
         result[key] = value
     return result
 
 
-def _weight_to_length_mm(weight_g: float, diameter_mm: float, density_g_cm3: float) -> float:
+def _finite_or_none(value: float | None) -> float | None:
+    return value if value is not None and math.isfinite(value) else None
+
+
+@contextmanager
+def _guard_core_inventory_writes(db: AsyncSession):
+    # Released Core services can flush derived weights inside the call.
+    def check_weights(session, _flush_context, _instances):
+        for record in session.new | session.dirty:
+            if isinstance(record, Spool):
+                attr = inspect(record).attrs.remaining_weight_g
+            elif isinstance(record, SpoolEvent):
+                attr = inspect(record).attrs.delta_weight_g
+            else:
+                continue
+            if attr.history.has_changes() and attr.value is not None and not math.isfinite(attr.value):
+                raise ValueError("The resulting spool and ledger weights must be finite.")
+
+    event.listen(db.sync_session, "before_flush", check_weights)
+    try:
+        yield
+    finally:
+        event.remove(db.sync_session, "before_flush", check_weights)
+
+
+def _weight_to_length_mm(weight_g: float | None, diameter_mm: float, density_g_cm3: float) -> float | None:
     """Convert net filament weight (g) to length (mm)."""
-    radius_cm = (diameter_mm / 2) / 10
-    cross_section_cm2 = math.pi * radius_cm**2
-    volume_cm3 = weight_g / density_g_cm3
-    length_cm = volume_cm3 / cross_section_cm2
-    return length_cm * 10
+    if weight_g is None or not all(math.isfinite(value) and value > 0 for value in (diameter_mm, density_g_cm3)):
+        return None
+    try:
+        radius_cm = (diameter_mm / 2) / 10
+        cross_section_cm2 = math.pi * radius_cm**2
+        length_mm = (weight_g / density_g_cm3) / cross_section_cm2 * 10
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if length_mm == 0 and weight_g != 0:
+        return None
+    return _finite_or_none(length_mm)
 
 
 def _length_to_weight_g(length_mm: float, diameter_mm: float, density_g_cm3: float) -> float:
@@ -188,6 +250,32 @@ class SpoolmanService:
 
     def _projection_definitions(self, entity: str) -> dict:
         return self.db.info.get("spoolman_definitions", {}).get(entity, {}) if self.db is not None else {}
+
+    def _retained_extra_sources(self, entity: Filament | Spool, kind: str) -> set[tuple[str, ...]]:
+        stored = entity.custom_fields or {}
+        aliases = entity.label_field_aliases or {}
+        local = entity.custom_field_definitions or {}
+        definitions = self._projection_definitions(kind)
+        sources = set()
+        reserved = projection._FILAMENT_TOP_LEVEL if kind == "filament" else {"comment"}
+        for path, alias in aliases.items():
+            target = projection.alias_target(alias)
+            if (
+                path in reserved or not isinstance(target, str)
+                or target.partition(".")[0] not in projection._NATIVE_FIELDS
+            ):
+                continue
+            source = projection.alias_source(path, alias, aliases)
+            if source is None:
+                continue
+            container = stored if len(source) == 1 else stored.get(source[0])
+            key = source[-1]
+            if not isinstance(container, dict) or key not in container:
+                continue
+            definition = projection.effective_source_definition(path, local, definitions)
+            if projection.owns_retained_source(alias, container[key], definition):
+                sources.add(source)
+        return sources
 
     def _filament_fields(self, filament: Filament) -> dict:
         if projection is None:
@@ -268,9 +356,7 @@ class SpoolmanService:
         return self._manufacturer_to_vendor(vendor)
 
     async def create_vendor(self, data: schemas.VendorParameters) -> schemas.Vendor:
-        custom_fields: dict[str, Any] = {}
-        if data.extra:
-            custom_fields.update({k: json.loads(v) for k, v in data.extra.items()})
+        custom_fields = _decode_extra(data.extra, text_fields=("comment", "external_id"))
         if data.comment is not None:
             custom_fields["comment"] = data.comment
         if data.external_id is not None:
@@ -312,7 +398,7 @@ class SpoolmanService:
             else:
                 custom_fields["external_id"] = payload["external_id"]
         if "extra" in payload and payload["extra"]:
-            custom_fields.update({k: json.loads(v) for k, v in payload["extra"].items()})
+            custom_fields.update(_decode_extra(payload["extra"], text_fields=("comment", "external_id")))
 
         vendor.custom_fields = custom_fields or None
         await self.db.commit()
@@ -484,7 +570,8 @@ class SpoolmanService:
         extra = _decode_filament_extra(payload.get("extra"))
         if projection is not None and extra:
             extra = _without_projected_echoes(
-                extra, filament.custom_fields or {}, self._filament_fields(filament), _TEMPERATURE_FIELDS
+                extra, filament.custom_fields or {}, self._filament_fields(filament),
+                _TEMPERATURE_FIELDS, self._retained_extra_sources(filament, "filament"),
             )
         if "name" in payload:
             filament.designation = payload["name"] or "Unnamed"
@@ -532,6 +619,7 @@ class SpoolmanService:
             filament.color_mode = filament.color_mode or "single"
 
         await self.db.commit()
+        self.db.expire(filament, ["manufacturer"])
         filament = await self._get_filament(filament.id)
         result = self._filament_to_schema(filament)
         await self._emit_event("filament", filament.id, schemas.EventType.updated, result)
@@ -655,7 +743,7 @@ class SpoolmanService:
     async def create_spool(self, data: schemas.SpoolParameters) -> schemas.Spool:
         custom_fields: dict[str, Any] = {}
         if data.extra:
-            custom_fields.update(_decode_extra(data.extra))
+            custom_fields.update(_decode_extra(data.extra, text_fields=("comment",)))
         legacy_card_uids: list[str] | None = None
         if "card_uids" in custom_fields:
             legacy_card_uids = _card_uid_values(custom_fields.pop("card_uids"))
@@ -696,16 +784,17 @@ class SpoolmanService:
             return None
 
         payload = data.model_dump(exclude_unset=True)
-        extra = _decode_extra(payload.get("extra"))
+        extra = _decode_extra(payload.get("extra"), text_fields=("comment",))
         if projection is not None and extra:
             extra = _without_projected_echoes(
-                extra, spool.custom_fields or {}, self._spool_fields(spool), {"card_uids"}
+                extra, spool.custom_fields or {}, self._spool_fields(spool),
+                {"card_uids"}, self._retained_extra_sources(spool, "spool"),
             )
         weight_keys = ("initial_weight", "spool_weight", "remaining_weight", "used_weight")
         weight_changes_requested = [key for key in weight_keys if key in payload]
-        old_initial_total_weight_g = spool.initial_total_weight_g
-        old_empty_spool_weight_g = spool.empty_spool_weight_g
-        old_remaining_weight_g = spool.remaining_weight_g
+        old_initial_total_weight_g = _finite_or_none(spool.initial_total_weight_g)
+        old_empty_spool_weight_g = _finite_or_none(spool.empty_spool_weight_g)
+        old_remaining_weight_g = _finite_or_none(spool.remaining_weight_g)
 
         if "filament_id" in payload:
             spool.filament_id = payload["filament_id"]
@@ -759,11 +848,11 @@ class SpoolmanService:
             )
 
             delta_weight_g: float | None = None
-            if (
-                old_remaining_weight_g is not None
-                and spool.remaining_weight_g is not None
-            ):
-                delta_weight_g = spool.remaining_weight_g - old_remaining_weight_g
+            new_remaining_weight_g = _finite_or_none(spool.remaining_weight_g)
+            if old_remaining_weight_g is not None and new_remaining_weight_g is not None:
+                delta_weight_g = new_remaining_weight_g - old_remaining_weight_g
+                if not math.isfinite(delta_weight_g):
+                    raise ValueError("The change in spool weight must be finite.")
 
             event_meta: dict[str, Any] = {
                 "source": "spoolmanapi.update_spool",
@@ -777,9 +866,9 @@ class SpoolmanService:
                     "remaining_weight_g": old_remaining_weight_g,
                 },
                 "after": {
-                    "initial_total_weight_g": spool.initial_total_weight_g,
-                    "empty_spool_weight_g": spool.empty_spool_weight_g,
-                    "remaining_weight_g": spool.remaining_weight_g,
+                    "initial_total_weight_g": _finite_or_none(spool.initial_total_weight_g),
+                    "empty_spool_weight_g": _finite_or_none(spool.empty_spool_weight_g),
+                    "remaining_weight_g": new_remaining_weight_g,
                 },
             }
 
@@ -796,6 +885,7 @@ class SpoolmanService:
             )
 
         await self.db.commit()
+        self.db.expire(spool, ["filament", "status", "location"])
         spool = await self._get_spool(spool.id)
         result = self._spool_to_schema(spool)
         await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
@@ -851,26 +941,30 @@ class SpoolmanService:
         if not spool:
             return None
 
-        now = datetime.now(timezone.utc)
-        if data.use_weight is not None:
-            await SpoolService(self.db).record_consumption(
-                spool,
-                delta_weight_g=data.use_weight,
-                event_at=now,
-                source="spoolman_api",
-            )
-        elif data.use_length is not None:
+        weight_g = data.use_weight
+        if weight_g is None and data.use_length is not None:
             filament = spool.filament
-            if filament and filament.diameter_mm and filament.density_g_cm3:
+            if filament is None or not all(
+                value is not None and math.isfinite(value) and value > 0
+                for value in (filament.diameter_mm, filament.density_g_cm3)
+            ):
+                raise ValueError("Provide use_weight or set a positive filament diameter and density.")
+            try:
                 weight_g = _length_to_weight_g(data.use_length, filament.diameter_mm, filament.density_g_cm3)
+            except OverflowError as exc:
+                raise ValueError("The converted consumption weight must be finite.") from exc
+            if not math.isfinite(weight_g) or (weight_g == 0 and data.use_length != 0):
+                raise ValueError("The requested length cannot be converted to a usable weight.")
+
+        if weight_g is not None:
+            with _guard_core_inventory_writes(self.db):
                 await SpoolService(self.db).record_consumption(
                     spool,
                     delta_weight_g=weight_g,
-                    event_at=now,
+                    event_at=datetime.now(timezone.utc),
                     source="spoolman_api",
                 )
-            else:
-                logger.warning("Cannot convert length to weight: missing filament data for spool %s", spool.id)
+            self.db.expire(spool, ["status"])
 
         spool = await self._get_spool(spool.id)
         result = self._spool_to_schema(spool)
@@ -882,13 +976,14 @@ class SpoolmanService:
         if not spool:
             return None
 
-        now = datetime.now(timezone.utc)
-        await SpoolService(self.db).record_measurement(
-            spool,
-            measured_weight_g=data.weight,
-            event_at=now,
-            source="spoolman_api",
-        )
+        with _guard_core_inventory_writes(self.db):
+            await SpoolService(self.db).record_measurement(
+                spool,
+                measured_weight_g=data.weight,
+                event_at=datetime.now(timezone.utc),
+                source="spoolman_api",
+            )
+        self.db.expire(spool, ["status"])
         spool = await self._get_spool(spool.id)
         result = self._spool_to_schema(spool)
         await self._emit_event("spool", spool.id, schemas.EventType.updated, result)
@@ -1208,16 +1303,7 @@ class SpoolmanService:
         settings = await self.get_all_settings()
         return settings.get(key)
 
-    async def set_setting(self, key: str, value: Any) -> dict | None:
-        return {"value": str(value), "is_set": True, "type": "string"}
-
     async def get_extra_fields(self, entity_type: str) -> list:
-        return []
-
-    async def add_extra_field(self, entity_type: str, key: str, data: dict) -> list:
-        return []
-
-    async def delete_extra_field(self, entity_type: str, key: str) -> list | None:
         return []
 
     async def get_external_filaments(self) -> list:
@@ -1225,9 +1311,6 @@ class SpoolmanService:
 
     async def get_external_materials(self) -> list:
         return []
-
-    async def create_backup(self) -> str:
-        return "/data/backups/filaman_backup.db"
 
     def _manufacturer_to_vendor(self, manufacturer: Manufacturer) -> schemas.Vendor:
         extra = dict(manufacturer.custom_fields or {})
@@ -1436,13 +1519,8 @@ class SpoolmanService:
         if initial_weight is not None and spool.remaining_weight_g is not None:
             used_weight = initial_weight - spool.remaining_weight_g
 
-        remaining_length = None
-        used_length = None
-        if filament.density and filament.diameter:
-            if spool.remaining_weight_g is not None:
-                remaining_length = _weight_to_length_mm(spool.remaining_weight_g, filament.diameter, filament.density)
-            if used_weight is not None:
-                used_length = _weight_to_length_mm(used_weight, filament.diameter, filament.density)
+        remaining_length = _weight_to_length_mm(spool.remaining_weight_g, filament.diameter, filament.density)
+        used_length = _weight_to_length_mm(used_weight, filament.diameter, filament.density) if used_weight is not None else 0.0
 
         custom_fields = self._spool_fields(spool)
         comment = custom_fields.pop("comment", None)
@@ -1458,13 +1536,13 @@ class SpoolmanService:
             first_used=spool.stocked_in_at,
             last_used=spool.last_used_at,
             filament=filament,
-            price=spool.purchase_price,
-            initial_weight=initial_weight,
-            spool_weight=spool.empty_spool_weight_g,
-            remaining_weight=spool.remaining_weight_g,
-            used_weight=used_weight if used_weight is not None else 0.0,
+            price=_finite_or_none(spool.purchase_price),
+            initial_weight=_finite_or_none(initial_weight),
+            spool_weight=_finite_or_none(spool.empty_spool_weight_g),
+            remaining_weight=_finite_or_none(spool.remaining_weight_g),
+            used_weight=_finite_or_none(used_weight) if used_weight is not None else 0.0,
             remaining_length=remaining_length,
-            used_length=used_length if used_length is not None else 0.0,
+            used_length=used_length,
             location=spool.location.name if spool.location else None,
             lot_nr=spool.lot_number,
             comment=comment,
@@ -1500,14 +1578,17 @@ class SpoolmanService:
         used_weight: float | None,
     ) -> None:
         if initial_weight is not None and spool_weight is not None:
-            spool.initial_total_weight_g = initial_weight + spool_weight
+            initial_total = initial_weight + spool_weight
+            if not math.isfinite(initial_total):
+                raise ValueError("The resulting spool weights must be finite.")
+            spool.initial_total_weight_g = initial_total
 
+        if remaining_weight is None and initial_weight is not None:
+            remaining_weight = initial_weight if used_weight is None else initial_weight - used_weight
         if remaining_weight is not None:
+            if not math.isfinite(remaining_weight):
+                raise ValueError("The resulting spool weights must be finite.")
             spool.remaining_weight_g = remaining_weight
-        elif initial_weight is not None and used_weight is not None:
-            spool.remaining_weight_g = initial_weight - used_weight
-        elif initial_weight is not None and remaining_weight is None:
-            spool.remaining_weight_g = initial_weight
 
     async def _migrate_legacy_spool_tags(self, spools: list[Spool]) -> bool:
         migrated = False

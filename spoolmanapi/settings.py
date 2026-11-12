@@ -16,10 +16,12 @@ from sqlalchemy import (
     JSON,
     MetaData,
     Table,
-    insert,
+    inspect,
     select,
-    update,
+    text,
 )
+from sqlalchemy.dialects import mysql, postgresql, sqlite
+from sqlalchemy.schema import CreateTable
 
 from app.core.database import async_session_maker, engine
 
@@ -60,7 +62,11 @@ async def _ensure_table() -> None:
         return
 
     async with engine.begin() as conn:
-        await conn.run_sync(_settings_table.create, checkfirst=True)
+        if not await conn.run_sync(lambda connection: inspect(connection).has_table(_settings_table.name)):
+            if conn.dialect.name == "postgresql":
+                # PostgreSQL can still race on catalog entries during concurrent DDL.
+                await conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('spoolmanapi_settings'))"))
+            await conn.execute(CreateTable(_settings_table, if_not_exists=True))
 
     _table_ensured = True
 
@@ -94,30 +100,18 @@ async def save_settings(settings: SpoolmanAPISettings) -> None:
 
     await _ensure_table()
 
-    async with async_session_maker() as session:
-        result = await session.execute(
-            select(_settings_table.c.id).where(_settings_table.c.id == 1)
+    values = {"ip_filter_enabled": settings.ip_filter_enabled, "allowed_ips": settings.allowed_ips}
+    dialect = engine.dialect.name
+    if dialect in {"mysql", "mariadb"}:
+        statement = mysql.insert(_settings_table).values(id=1, **values).on_duplicate_key_update(**values)
+    else:
+        insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
+        statement = insert(_settings_table).values(id=1, **values).on_conflict_do_update(
+            index_elements=[_settings_table.c.id], set_=values,
         )
-        exists = result.first() is not None
 
-        if exists:
-            await session.execute(
-                update(_settings_table)
-                .where(_settings_table.c.id == 1)
-                .values(
-                    ip_filter_enabled=settings.ip_filter_enabled,
-                    allowed_ips=settings.allowed_ips,
-                )
-            )
-        else:
-            await session.execute(
-                insert(_settings_table).values(
-                    id=1,
-                    ip_filter_enabled=settings.ip_filter_enabled,
-                    allowed_ips=settings.allowed_ips,
-                )
-            )
-
+    async with async_session_maker() as session:
+        await session.execute(statement)
         await session.commit()
 
     _logger.info("SpoolmanAPI-Settings in Datenbank gespeichert")

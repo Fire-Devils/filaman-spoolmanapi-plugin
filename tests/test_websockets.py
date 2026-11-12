@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+import os
+import socket
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -46,11 +48,15 @@ def plugin(tmp_path):
         router = importlib.import_module(f"{package_name}.router")
         settings = importlib.import_module(f"{package_name}.settings")
         ip_filter = importlib.import_module(f"{package_name}.ip_filter")
+        ws_module = importlib.import_module(f"{package_name}.ws")
     app = FastAPI()
     app.include_router(router.router, prefix="/spoolman")
     app.include_router(router.admin_router, prefix="/api/v1")
     try:
-        yield SimpleNamespace(app=app, router=router, settings=settings, ip_filter=ip_filter, database_url=database_url)
+        yield SimpleNamespace(
+            app=app, router=router, settings=settings, ip_filter=ip_filter,
+            database_url=database_url, ws_module=ws_module,
+        )
     finally:
         asyncio.run(engine.dispose())
 
@@ -66,6 +72,173 @@ async def revoke_from_another_connection(plugin):
             )
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix" or not hasattr(socket, "AF_UNIX"), reason="requires Unix worker sockets")
+async def test_cross_worker_delivery_checks_each_socket_and_does_not_duplicate(plugin):
+    manager = type(plugin.router.websocket_manager)
+    publisher, remote = manager(), manager()
+    local_messages, remote_messages, denied_messages = [], [], []
+    remote_delivered, denied_closed = asyncio.Event(), asyncio.Event()
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    def connection(ip, messages, delivered=None):
+        async def send(message):
+            messages.append(message)
+            if delivered and message["type"] in {"websocket.send", "websocket.close"}:
+                delivered.set()
+
+        return WebSocket({"type": "websocket", "client": (ip, 50000)}, receive, send)
+
+    local = connection("192.0.2.1", local_messages)
+    allowed = connection("192.0.2.1", remote_messages, remote_delivered)
+    denied = connection("192.0.2.2", denied_messages, denied_closed)
+    event = SimpleNamespace(model_dump_json=lambda: '{"id":42}')
+    async with (
+        publisher.subscribe(("spool",), local),
+        remote.subscribe((), allowed),
+        remote.subscribe(("spool", "42"), denied),
+    ):
+        paths = [publisher._path, remote._path]
+        assert all(path.is_socket() for path in paths)
+        directory = publisher._path.parent
+        stale = directory / f"{os.getpid()}-stale.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unused:
+            unused.bind(str(stale))
+
+        await plugin.settings.save_settings(
+            plugin.settings.SpoolmanAPISettings(ip_filter_enabled=True, allowed_ips=["192.0.2.1"])
+        )
+        await publisher.send(("spool", "42"), event)
+        await asyncio.wait_for(remote_delivered.wait(), timeout=2)
+        await asyncio.wait_for(denied_closed.wait(), timeout=2)
+        assert not stale.exists()
+
+    expected = {"type": "websocket.send", "text": '{"id":42}'}
+    assert local_messages[1:] == [expected]
+    assert remote_messages[1:] == [expected]
+    assert denied_messages[1:] == [{"type": "websocket.close", "code": 1008, "reason": "IP not allowed"}]
+    assert all(not path.exists() for path in paths)
+    assert not directory.stat().st_mode & 0o077
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix" or not hasattr(socket, "AF_UNIX"), reason="requires Unix worker sockets")
+async def test_sequential_updates_arrive_in_order_on_remote_worker(plugin):
+    manager = type(plugin.router.websocket_manager)
+    publisher, remote = manager(), manager()
+    first_started, release_first, second_delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    delivered = []
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        if message["type"] == "websocket.send":
+            if message["text"] == "first":
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_delivered.set()
+            delivered.append(message["text"])
+
+    async def publish():
+        await publisher.send(("spool", "42"), SimpleNamespace(model_dump_json=lambda: "first"))
+        await publisher.send(("spool", "42"), SimpleNamespace(model_dump_json=lambda: "second"))
+
+    ws = WebSocket({"type": "websocket", "client": ("192.0.2.1", 50000)}, receive, send)
+    async with remote.subscribe((), ws):
+        task = asyncio.create_task(publish())
+        try:
+            await asyncio.wait_for(first_started.wait(), timeout=2)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(second_delivered.wait(), timeout=0.1)
+        finally:
+            release_first.set()
+            await asyncio.wait_for(task, timeout=2)
+        assert delivered == ["first", "second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix" or not hasattr(socket, "AF_UNIX"), reason="requires Unix worker sockets")
+async def test_slow_remote_subscriber_does_not_block_healthy_subscriber(plugin):
+    manager = type(plugin.router.websocket_manager)
+    publisher, remote = manager(), manager()
+    slow_started, release_slow, healthy_delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        if message["type"] != "websocket.send":
+            return
+        if not slow_started.is_set():
+            slow_started.set()
+            await release_slow.wait()
+        else:
+            healthy_delivered.set()
+
+    scope = {"type": "websocket", "client": ("192.0.2.1", 50000)}
+    update = SimpleNamespace(model_dump_json=lambda: '{"id":42}')
+    async with (
+        remote.subscribe((), WebSocket(scope, receive, send)),
+        remote.subscribe((), WebSocket(scope, receive, send)),
+    ):
+        task = asyncio.create_task(publisher.send(("spool", "42"), update))
+        try:
+            await asyncio.wait_for(slow_started.wait(), timeout=2)
+            await asyncio.wait_for(healthy_delivered.wait(), timeout=0.5)
+        finally:
+            release_slow.set()
+            await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix" or not hasattr(socket, "AF_UNIX"), reason="requires Unix worker sockets")
+async def test_new_subscription_recovers_relay_after_failed_bind(plugin, monkeypatch):
+    manager = type(plugin.router.websocket_manager)
+    publisher, remote = manager(), manager()
+    messages = []
+    start_server = asyncio.start_unix_server
+
+    async def fail_first_bind(*args, **kwargs):
+        monkeypatch.setattr(asyncio, "start_unix_server", start_server)
+        raise OSError("temporary bind failure")
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        if message["type"] == "websocket.send":
+            messages.append(message["text"])
+
+    scope = {"type": "websocket", "client": ("192.0.2.1", 50000)}
+    monkeypatch.setattr(asyncio, "start_unix_server", fail_first_bind)
+    async with remote.subscribe(("spool",), WebSocket(scope, receive, send)):
+        async with remote.subscribe(("vendor",), WebSocket(scope, receive, send)):
+            await publisher.send(("spool", "42"), SimpleNamespace(model_dump_json=lambda: '{"id":42}'))
+    assert messages == ['{"id":42}']
+
+
+@pytest.mark.asyncio
+async def test_local_websocket_delivery_without_unix_relay(plugin, monkeypatch):
+    manager = plugin.router.websocket_manager
+    monkeypatch.setattr(plugin.ws_module, "_UNIX_RELAY", False)
+    messages = []
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        messages.append(message)
+
+    ws = WebSocket({"type": "websocket", "client": ("192.0.2.1", 50000)}, receive, send)
+    async with manager.subscribe((), ws):
+        await manager.send(("spool", "42"), SimpleNamespace(model_dump_json=lambda: '{"id":42}'))
+    assert messages[1:] == [{"type": "websocket.send", "text": '{"id":42}'}]
 
 
 @pytest.mark.parametrize("delivery", ["broadcast", "ping"])

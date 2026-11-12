@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import sys
 from pathlib import Path
@@ -7,8 +8,9 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException, WebSocket
 from pydantic import ValidationError
-from sqlalchemy import update
+from sqlalchemy import event, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.schema import CreateTable
 from starlette.requests import HTTPConnection
 
 from spoolmanapi.schemas import SpoolmanAPISettings, SpoolmanAPISettingsUpdate
@@ -24,6 +26,66 @@ with patch.dict(sys.modules, {
 }):
     plugin_settings = importlib.import_module(f"{package.__name__}.settings")
     ip_filter = importlib.import_module(f"{package.__name__}.ip_filter")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_access_creates_settings_table(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cold-settings.db'}")
+    monkeypatch.setattr(plugin_settings, "engine", engine)
+    monkeypatch.setattr(plugin_settings, "async_session_maker", async_sessionmaker(engine))
+    monkeypatch.setattr(plugin_settings, "_table_ensured", False)
+    try:
+        results = await asyncio.gather(
+            *(plugin_settings.load_settings() for _ in range(16)),
+            return_exceptions=True,
+        )
+        assert results == [plugin_settings.SpoolmanAPISettings()] * 16
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_existing_settings_can_be_used_without_ddl_permissions(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'existing-settings.db'}")
+    monkeypatch.setattr(plugin_settings, "engine", engine)
+    monkeypatch.setattr(plugin_settings, "async_session_maker", async_sessionmaker(engine))
+    monkeypatch.setattr(plugin_settings, "_table_ensured", False)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(CreateTable(plugin_settings._settings_table))
+
+        @event.listens_for(engine.sync_engine, "before_execute")
+        def deny_create(_conn, statement, _multiparams, _params, _options):
+            if isinstance(statement, CreateTable):
+                raise PermissionError("CREATE TABLE denied")
+
+        await plugin_settings.save_settings(SpoolmanAPISettings(ip_filter_enabled=True))
+        assert (await plugin_settings.load_settings()).ip_filter_enabled is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_saves_update_one_settings_row(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'first-saves.db'}")
+    monkeypatch.setattr(plugin_settings, "engine", engine)
+    monkeypatch.setattr(plugin_settings, "async_session_maker", async_sessionmaker(engine))
+    monkeypatch.setattr(plugin_settings, "_table_ensured", False)
+    try:
+        await plugin_settings.load_settings()
+        choices = [
+            SpoolmanAPISettings(ip_filter_enabled=True, allowed_ips=[f"192.0.2.{i}"])
+            for i in range(1, 17)
+        ]
+        results = await asyncio.gather(
+            *(plugin_settings.save_settings(choice) for choice in choices),
+            return_exceptions=True,
+        )
+        assert results == [None] * len(choices)
+        saved = await plugin_settings.load_settings()
+        assert saved.model_dump() in [choice.model_dump() for choice in choices]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
