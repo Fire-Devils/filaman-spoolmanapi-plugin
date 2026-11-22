@@ -5,7 +5,9 @@ from test_alpha_hex import color_api, plugin_settings
 from app.models.filament import Filament, Manufacturer
 from app.models.location import Location
 from app.models.spool import Spool, SpoolEvent, SpoolStatus
-from spoolmanapi.service import SpoolmanService
+from spoolmanapi.service import (
+    DEFAULT_DENSITY_G_CM3, DEFAULT_DIAMETER_MM, SpoolmanService, _length_to_weight_g,
+)
 
 
 API = "/spoolman/api/v1"
@@ -173,13 +175,25 @@ async def test_spool_operation_response_uses_saved_status(color_api, operation, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("diameter,density", [(1.75, None), (-1, 1.24)])
+@pytest.mark.parametrize("diameter,density", [(-1, 1.24), (1.75, -1)])
 async def test_length_requires_usable_filament_dimensions(color_api, diameter, density):
     spool_id, _, _ = await add_spool(diameter=diameter, density=density)
     response = await color_api.put(f"{API}/spool/{spool_id}/use", json={"use_length": 500})
     assert response.status_code == 422, response.text
     assert "use_weight" in response.text
     await assert_inventory_untouched(spool_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("diameter,density", [(1.75, None), (0, 1.24), (0, None)])
+async def test_length_uses_advertised_defaults_for_missing_dimensions(color_api, diameter, density):
+    spool_id, _, _ = await add_spool(diameter=diameter, density=density)
+    response = await color_api.put(f"{API}/spool/{spool_id}/use", json={"use_length": 500})
+    assert response.status_code == 200, response.text
+    expected = _length_to_weight_g(500, DEFAULT_DIAMETER_MM, DEFAULT_DENSITY_G_CM3)
+    assert expected == pytest.approx(1.49, abs=0.01)
+    async with plugin_settings.async_session_maker() as db:
+        assert (await db.get(Spool, spool_id)).remaining_weight_g == pytest.approx(1000 - expected)
 
 
 @pytest.mark.asyncio
