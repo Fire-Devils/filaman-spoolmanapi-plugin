@@ -34,6 +34,9 @@ from .ws import websocket_manager
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_DENSITY_G_CM3 = 1.24
+DEFAULT_DIAMETER_MM = 1.75
+
 _TEMPERATURE_FIELDS = {
     "settings_extruder_temp": "extruder_temp_range_c",
     "settings_bed_temp": "bed_temp_range_c",
@@ -538,7 +541,7 @@ class SpoolmanService:
             manufacturer_id=data.vendor_id,
             material_type=data.material or "PLA",
             density_g_cm3=data.density,
-            diameter_mm=data.diameter or 1.75,
+            diameter_mm=data.diameter or DEFAULT_DIAMETER_MM,
             raw_material_weight_g=data.weight,
             default_spool_weight_g=data.spool_weight,
             price=data.price,
@@ -582,7 +585,7 @@ class SpoolmanService:
         if "density" in payload:
             filament.density_g_cm3 = payload["density"]
         if "diameter" in payload:
-            filament.diameter_mm = payload["diameter"] or 1.75
+            filament.diameter_mm = payload["diameter"] or DEFAULT_DIAMETER_MM
         if "weight" in payload:
             filament.raw_material_weight_g = payload["weight"]
         if "spool_weight" in payload:
@@ -944,13 +947,24 @@ class SpoolmanService:
         weight_g = data.use_weight
         if weight_g is None and data.use_length is not None:
             filament = spool.filament
-            if filament is None or not all(
-                value is not None and math.isfinite(value) and value > 0
-                for value in (filament.diameter_mm, filament.density_g_cm3)
-            ):
+            if filament is None:
+                raise ValueError("Provide use_weight or set a positive filament diameter and density.")
+            diameter = filament.diameter_mm or DEFAULT_DIAMETER_MM
+            density = filament.density_g_cm3 or DEFAULT_DENSITY_G_CM3
+            used_defaults = []
+            if not filament.diameter_mm:
+                used_defaults.append(f"diameter={DEFAULT_DIAMETER_MM}")
+            if not filament.density_g_cm3:
+                used_defaults.append(f"density={DEFAULT_DENSITY_G_CM3}")
+            if used_defaults:
+                logger.warning(
+                    "Spool %s: filament %s has no %s stored; using defaults for use_length conversion",
+                    spool_id, filament.id, ", ".join(used_defaults),
+                )
+            if not all(math.isfinite(v) and v > 0 for v in (diameter, density)):
                 raise ValueError("Provide use_weight or set a positive filament diameter and density.")
             try:
-                weight_g = _length_to_weight_g(data.use_length, filament.diameter_mm, filament.density_g_cm3)
+                weight_g = _length_to_weight_g(data.use_length, diameter, density)
             except OverflowError as exc:
                 raise ValueError("The converted consumption weight must be finite.") from exc
             if not math.isfinite(weight_g) or (weight_g == 0 and data.use_length != 0):
@@ -1364,8 +1378,8 @@ class SpoolmanService:
             vendor=vendor,
             material=filament.material_type,
             price=filament.price,
-            density=filament.density_g_cm3 or 1.24,
-            diameter=filament.diameter_mm or 1.75,
+            density=filament.density_g_cm3 or DEFAULT_DENSITY_G_CM3,
+            diameter=filament.diameter_mm or DEFAULT_DIAMETER_MM,
             weight=filament.raw_material_weight_g,
             spool_weight=filament.default_spool_weight_g,
             article_number=article_number,
